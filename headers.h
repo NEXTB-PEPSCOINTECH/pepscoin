@@ -17,28 +17,24 @@
 #endif
 #define _WIN32_IE 0x0400
 #define WIN32_LEAN_AND_MEAN 1
+#define __STDC_LIMIT_MACROS // to enable UINT64_MAX from stdint.h
 #include <wx/wx.h>
 #include <wx/clipbrd.h>
 #include <wx/snglinst.h>
 #include <wx/taskbar.h>
+#include <wx/stdpaths.h>
+#include <wx/utils.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
-#include <windows.h>
-#include <winsock2.h>
-#include <mswsock.h>
-#include <shlobj.h>
-#include <shlwapi.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <io.h>
 #include <math.h>
 #include <limits.h>
 #include <float.h>
 #include <assert.h>
-#include <process.h>
 #include <malloc.h>
 #include <memory>
 #define BOUNDSCHECK 1
@@ -57,6 +53,31 @@
 #include <boost/tuple/tuple_comparison.hpp>
 #include <boost/tuple/tuple_io.hpp>
 #include <boost/array.hpp>
+#include <boost/bind.hpp>
+#include <boost/function.hpp>
+
+#ifdef __WXMSW__
+#include <windows.h>
+#include <winsock2.h>
+#include <mswsock.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <io.h>
+#include <process.h>
+#else
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <errno.h>
+#include <net/if.h>
+#include <ifaddrs.h>
+#include <boost/filesystem.hpp>
+#include <boost/algorithm/string.hpp>
+#endif
+
 #pragma hdrstop
 using namespace std;
 using namespace boost;
@@ -78,3 +99,14 @@ using namespace boost;
 #include "market.h"
 #include "uibase.h"
 #include "ui.h"
+
+#include "xpm/addressbook16.xpm"
+#include "xpm/addressbook20.xpm"
+#include "xpm/bitcoin16.xpm"
+#include "xpm/bitcoin20.xpm"
+#include "xpm/bitcoin32.xpm"
+#include "xpm/bitcoin48.xpm"
+#include "xpm/check.xpm"
+#include "xpm/send16.xpm"
+#include "xpm/send16noshadow.xpm"
+#include "xpm/send20.xpm"

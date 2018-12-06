@@ -3,13 +3,11 @@
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
 #include "headers.h"
-#include <winsock2.h>
 
 void ThreadMessageHandler2(void* parg);
 void ThreadSocketHandler2(void* parg);
 void ThreadOpenConnections2(void* parg);
 bool OpenNetworkConnection(const CAddress& addrConnect);
-
 
 
 
@@ -21,12 +19,11 @@ bool OpenNetworkConnection(const CAddress& addrConnect);
 bool fClient = false;
 uint64 nLocalServices = (fClient ? 0 : NODE_NETWORK);
 CAddress addrLocalHost(0, DEFAULT_PORT, nLocalServices);
-CNode nodeLocalHost(INVALID_SOCKET, CAddress("127.0.0.1", nLocalServices));
-CNode* pnodeLocalHost = &nodeLocalHost;
+CNode* pnodeLocalHost = NULL;
 uint64 nLocalHostNonce = 0;
-bool fShutdown = false;
 array<int, 10> vnThreadsRunning;
 SOCKET hListenSocket = INVALID_SOCKET;
+int64 nThreadSocketHandlerHeartbeat = INT64_MAX;
 
 vector<CNode*> vNodes;
 CCriticalSection cs_vNodes;
@@ -43,6 +40,23 @@ CAddress addrProxy("127.0.0.1:9050");
 
 
 
+
+
+void CNode::PushGetBlocks(CBlockIndex* pindexBegin, uint256 hashEnd)
+{
+    // Filter out duplicate requests
+    if (pindexBegin == pindexLastGetBlocksBegin && hashEnd == hashLastGetBlocksEnd)
+        return;
+    pindexLastGetBlocksBegin = pindexBegin;
+    hashLastGetBlocksEnd = hashEnd;
+
+    PushMessage("getblocks", CBlockLocator(pindexBegin), hashEnd);
+}
+
+
+
+
+
 bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet)
 {
     hSocketRet = INVALID_SOCKET;
@@ -50,6 +64,10 @@ bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet)
     SOCKET hSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (hSocket == INVALID_SOCKET)
         return false;
+#if defined(__BSD__) || defined(__WXOSX__)
+    int set = 1;
+    setsockopt(hSocket, SOL_SOCKET, SO_NOSIGPIPE, (void*)&set, sizeof(int));
+#endif
 
     bool fRoutable = !(addrConnect.GetByte(3) == 10 || (addrConnect.GetByte(3) == 192 && addrConnect.GetByte(2) == 168));
     bool fProxy = (fUseProxy && fRoutable);
@@ -63,14 +81,14 @@ bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet)
 
     if (fProxy)
     {
-        printf("Proxy connecting %s\n", addrConnect.ToStringLog().c_str());
+        printf("proxy connecting %s\n", addrConnect.ToStringLog().c_str());
         char pszSocks4IP[] = "\4\1\0\0\0\0\0\0user";
         memcpy(pszSocks4IP + 2, &addrConnect.port, 2);
         memcpy(pszSocks4IP + 4, &addrConnect.ip, 4);
         char* pszSocks4 = pszSocks4IP;
         int nSize = sizeof(pszSocks4IP);
 
-        int ret = send(hSocket, pszSocks4, nSize, 0);
+        int ret = send(hSocket, pszSocks4, nSize, MSG_NOSIGNAL);
         if (ret != nSize)
         {
             closesocket(hSocket);
@@ -85,9 +103,11 @@ bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet)
         if (pchRet[1] != 0x5a)
         {
             closesocket(hSocket);
-            return error("Proxy returned error %d", pchRet[1]);
+            if (pchRet[1] != 0x5b)
+                printf("ERROR: Proxy returned error %d\n", pchRet[1]);
+            return false;
         }
-        printf("Proxy connection established %s\n", addrConnect.ToStringLog().c_str());
+        printf("proxy connected %s\n", addrConnect.ToStringLog().c_str());
     }
 
     hSocketRet = hSocket;
@@ -102,7 +122,7 @@ bool GetMyExternalIP2(const CAddress& addrConnect, const char* pszGet, const cha
     if (!ConnectSocket(addrConnect, hSocket))
         return error("GetMyExternalIP() : connection to %s failed", addrConnect.ToString().c_str());
 
-    send(hSocket, pszGet, strlen(pszGet), 0);
+    send(hSocket, pszGet, strlen(pszGet), MSG_NOSIGNAL);
 
     string strLine;
     while (RecvLine(hSocket, strLine))
@@ -126,10 +146,11 @@ bool GetMyExternalIP2(const CAddress& addrConnect, const char* pszGet, const cha
             if (strLine.find("<"))
                 strLine = strLine.substr(0, strLine.find("<"));
             strLine = strLine.substr(strspn(strLine.c_str(), " \t\n\r"));
-            strLine = wxString(strLine).Trim();
+            while (strLine.size() > 0 && isspace(strLine[strLine.size()-1]))
+                strLine.resize(strLine.size()-1);
             CAddress addr(strLine.c_str());
             printf("GetMyExternalIP() received [%s] %s\n", strLine.c_str(), addr.ToString().c_str());
-            if (addr.ip == 0 || !addr.IsRoutable())
+            if (addr.ip == 0 || addr.ip == INADDR_NONE || !addr.IsRoutable())
                 return false;
             ipRet = addr.ip;
             return true;
@@ -143,8 +164,8 @@ bool GetMyExternalIP2(const CAddress& addrConnect, const char* pszGet, const cha
 bool GetMyExternalIP(unsigned int& ipRet)
 {
     CAddress addrConnect;
-    char* pszGet;
-    char* pszKeyword;
+    const char* pszGet;
+    const char* pszKeyword;
 
     if (fUseProxy)
         return false;
@@ -202,42 +223,68 @@ bool GetMyExternalIP(unsigned int& ipRet)
 
 
 
-bool AddAddress(CAddrDB& addrdb, const CAddress& addr)
+bool AddAddress(CAddrDB& addrdb, CAddress addr, bool fCurrentlyOnline)
 {
     if (!addr.IsRoutable())
         return false;
     if (addr.ip == addrLocalHost.ip)
         return false;
+    if (fCurrentlyOnline)
+        addr.nTime = GetAdjustedTime();
     CRITICAL_BLOCK(cs_mapAddresses)
     {
         map<vector<unsigned char>, CAddress>::iterator it = mapAddresses.find(addr.GetKey());
         if (it == mapAddresses.end())
         {
             // New address
+            printf("AddAddress(%s)\n", addr.ToStringLog().c_str());
             mapAddresses.insert(make_pair(addr.GetKey(), addr));
             addrdb.WriteAddress(addr);
             return true;
         }
         else
         {
+            bool fUpdated = false;
             CAddress& addrFound = (*it).second;
             if ((addrFound.nServices | addr.nServices) != addrFound.nServices)
             {
                 // Services have been added
                 addrFound.nServices |= addr.nServices;
-                addrdb.WriteAddress(addrFound);
-                return true;
+                fUpdated = true;
             }
-            else if (addrFound.nTime < GetAdjustedTime() - 24 * 60 * 60)
+            int64 nUpdateInterval = (fCurrentlyOnline ? 60 * 60 : 24 * 60 * 60);
+            if (addrFound.nTime < addr.nTime - nUpdateInterval)
             {
                 // Periodically update most recently seen time
-                addrFound.nTime = GetAdjustedTime();
-                addrdb.WriteAddress(addrFound);
-                return false;
+                addrFound.nTime = addr.nTime;
+                fUpdated = true;
             }
+            if (fUpdated)
+                addrdb.WriteAddress(addrFound);
         }
     }
     return false;
+}
+
+void AddressCurrentlyConnected(const CAddress& addr)
+{
+    CRITICAL_BLOCK(cs_mapAddresses)
+    {
+        // Only if it's been published already
+        map<vector<unsigned char>, CAddress>::iterator it = mapAddresses.find(addr.GetKey());
+        if (it != mapAddresses.end())
+        {
+            CAddress& addrFound = (*it).second;
+            int64 nUpdateInterval = 20 * 60;
+            if (addrFound.nTime < GetAdjustedTime() - nUpdateInterval)
+            {
+                // Periodically update most recently seen time
+                addrFound.nTime = GetAdjustedTime();
+                CAddrDB addrdb;
+                addrdb.WriteAddress(addrFound);
+            }
+        }
+    }
 }
 
 
@@ -389,7 +436,13 @@ CNode* ConnectNode(CAddress addrConnect, int64 nTimeout)
     }
 
     /// debug print
-    printf("trying connection %s\n", addrConnect.ToStringLog().c_str());
+    printf("trying connection %s lastseen=%.1fhrs lasttry=%.1fhrs\n",
+        addrConnect.ToStringLog().c_str(),
+        (double)(addrConnect.nTime - GetAdjustedTime())/3600.0,
+        (double)(addrConnect.nLastTry - GetAdjustedTime())/3600.0);
+
+    CRITICAL_BLOCK(cs_mapAddresses)
+        mapAddresses[addrConnect.GetKey()].nLastTry = GetAdjustedTime();
 
     // Connect
     SOCKET hSocket;
@@ -399,9 +452,14 @@ CNode* ConnectNode(CAddress addrConnect, int64 nTimeout)
         printf("connected %s\n", addrConnect.ToStringLog().c_str());
 
         // Set to nonblocking
+#ifdef __WXMSW__
         u_long nOne = 1;
         if (ioctlsocket(hSocket, FIONBIO, &nOne) == SOCKET_ERROR)
             printf("ConnectSocket() : ioctlsocket nonblocking setting failed, error %d\n", WSAGetLastError());
+#else
+        if (fcntl(hSocket, F_SETFL, O_NONBLOCK) == SOCKET_ERROR)
+            printf("ConnectSocket() : fcntl nonblocking setting failed, error %d\n", errno);
+#endif
 
         // Add node
         CNode* pnode = new CNode(hSocket, addrConnect, false);
@@ -412,29 +470,30 @@ CNode* ConnectNode(CAddress addrConnect, int64 nTimeout)
         CRITICAL_BLOCK(cs_vNodes)
             vNodes.push_back(pnode);
 
-        CRITICAL_BLOCK(cs_mapAddresses)
-            mapAddresses[addrConnect.GetKey()].nLastFailed = 0;
+        pnode->nTimeConnected = GetTime();
         return pnode;
     }
     else
     {
-        CRITICAL_BLOCK(cs_mapAddresses)
-            mapAddresses[addrConnect.GetKey()].nLastFailed = GetTime();
         return NULL;
     }
 }
 
-void CNode::DoDisconnect()
+void CNode::CloseSocketDisconnect()
 {
-    printf("disconnecting node %s\n", addr.ToStringLog().c_str());
+    fDisconnect = true;
+    if (hSocket != INVALID_SOCKET)
+    {
+        if (fDebug)
+            printf("%s ", DateTimeStrFormat("%x %H:%M:%S", GetTime()).c_str());
+        printf("disconnecting node %s\n", addr.ToStringLog().c_str());
+        closesocket(hSocket);
+        hSocket = INVALID_SOCKET;
+    }
+}
 
-    closesocket(hSocket);
-
-    // If outbound and never got version message, mark address as failed
-    if (!fInbound && !fSuccessfullyConnected)
-        CRITICAL_BLOCK(cs_mapAddresses)
-            mapAddresses[addr.GetKey()].nLastFailed = GetTime();
-
+void CNode::Cleanup()
+{
     // All of a nodes broadcasts and subscriptions are automatically torn down
     // when it goes down, so a node has to stay up to keep its broadcast going.
 
@@ -464,24 +523,21 @@ void ThreadSocketHandler(void* parg)
 {
     IMPLEMENT_RANDOMIZE_STACK(ThreadSocketHandler(parg));
 
-    loop
+    try
     {
         vnThreadsRunning[0]++;
-        CheckForShutdown(0);
-        try
-        {
-            ThreadSocketHandler2(parg);
-            vnThreadsRunning[0]--;
-        }
-        catch (std::exception& e) {
-            vnThreadsRunning[0]--;
-            PrintException(&e, "ThreadSocketHandler()");
-        } catch (...) {
-            vnThreadsRunning[0]--;
-            PrintException(NULL, "ThreadSocketHandler()");
-        }
-        Sleep(5000);
+        ThreadSocketHandler2(parg);
+        vnThreadsRunning[0]--;
     }
+    catch (std::exception& e) {
+        vnThreadsRunning[0]--;
+        PrintException(&e, "ThreadSocketHandler()");
+    } catch (...) {
+        vnThreadsRunning[0]--;
+        throw; // support pthread_cancel()
+    }
+
+    printf("ThreadSocketHandler exiting\n");
 }
 
 void ThreadSocketHandler2(void* parg)
@@ -501,15 +557,19 @@ void ThreadSocketHandler2(void* parg)
             vector<CNode*> vNodesCopy = vNodes;
             foreach(CNode* pnode, vNodesCopy)
             {
-                if (pnode->ReadyToDisconnect() && pnode->vRecv.empty() && pnode->vSend.empty())
+                if (pnode->fDisconnect ||
+                    (pnode->GetRefCount() <= 0 && pnode->vRecv.empty() && pnode->vSend.empty()))
                 {
                     // remove from vNodes
                     vNodes.erase(remove(vNodes.begin(), vNodes.end(), pnode), vNodes.end());
-                    pnode->DoDisconnect();
+
+                    // close socket and cleanup
+                    pnode->CloseSocketDisconnect();
+                    pnode->Cleanup();
 
                     // hold in disconnected pool until all refs are released
-                    pnode->nReleaseTime = max(pnode->nReleaseTime, GetTime() + 5 * 60);
-                    if (pnode->fNetworkNode)
+                    pnode->nReleaseTime = max(pnode->nReleaseTime, GetTime() + 15 * 60);
+                    if (pnode->fNetworkNode || pnode->fInbound)
                         pnode->Release();
                     vNodesDisconnected.push_back(pnode);
                 }
@@ -550,10 +610,12 @@ void ThreadSocketHandler2(void* parg)
         timeout.tv_sec  = 0;
         timeout.tv_usec = 50000; // frequency to poll pnode->vSend
 
-        struct fd_set fdsetRecv;
-        struct fd_set fdsetSend;
+        fd_set fdsetRecv;
+        fd_set fdsetSend;
+        fd_set fdsetError;
         FD_ZERO(&fdsetRecv);
         FD_ZERO(&fdsetSend);
+        FD_ZERO(&fdsetError);
         SOCKET hSocketMax = 0;
         FD_SET(hListenSocket, &fdsetRecv);
         hSocketMax = max(hSocketMax, hListenSocket);
@@ -561,7 +623,10 @@ void ThreadSocketHandler2(void* parg)
         {
             foreach(CNode* pnode, vNodes)
             {
+                if (pnode->hSocket == INVALID_SOCKET || pnode->hSocket < 0)
+                    continue;
                 FD_SET(pnode->hSocket, &fdsetRecv);
+                FD_SET(pnode->hSocket, &fdsetError);
                 hSocketMax = max(hSocketMax, pnode->hSocket);
                 TRY_CRITICAL_BLOCK(pnode->cs_vSend)
                     if (!pnode->vSend.empty())
@@ -570,28 +635,20 @@ void ThreadSocketHandler2(void* parg)
         }
 
         vnThreadsRunning[0]--;
-        int nSelect = select(hSocketMax + 1, &fdsetRecv, &fdsetSend, NULL, &timeout);
+        int nSelect = select(hSocketMax + 1, &fdsetRecv, &fdsetSend, &fdsetError, &timeout);
         vnThreadsRunning[0]++;
-        CheckForShutdown(0);
+        if (fShutdown)
+            return;
         if (nSelect == SOCKET_ERROR)
         {
             int nErr = WSAGetLastError();
-            printf("select failed: %d\n", nErr);
+            printf("socket select error %d\n", nErr);
             for (int i = 0; i <= hSocketMax; i++)
-            {
                 FD_SET(i, &fdsetRecv);
-                FD_SET(i, &fdsetSend);
-            }
+            FD_ZERO(&fdsetSend);
+            FD_ZERO(&fdsetError);
             Sleep(timeout.tv_usec/1000);
         }
-
-        //// debug print
-        //foreach(CNode* pnode, vNodes)
-        //{
-        //    printf("vRecv = %-5d ", pnode->vRecv.size());
-        //    printf("vSend = %-5d    ", pnode->vSend.size());
-        //}
-        //printf("\n");
 
 
         //
@@ -600,13 +657,17 @@ void ThreadSocketHandler2(void* parg)
         if (FD_ISSET(hListenSocket, &fdsetRecv))
         {
             struct sockaddr_in sockaddr;
+#ifdef __WXMSW__
             int len = sizeof(sockaddr);
+#else
+            socklen_t len = sizeof(sockaddr);
+#endif
             SOCKET hSocket = accept(hListenSocket, (struct sockaddr*)&sockaddr, &len);
             CAddress addr(sockaddr);
             if (hSocket == INVALID_SOCKET)
             {
                 if (WSAGetLastError() != WSAEWOULDBLOCK)
-                    printf("ERROR ThreadSocketHandler accept failed: %d\n", WSAGetLastError());
+                    printf("socket error accept failed: %d\n", WSAGetLastError());
             }
             else
             {
@@ -624,16 +685,22 @@ void ThreadSocketHandler2(void* parg)
         //
         vector<CNode*> vNodesCopy;
         CRITICAL_BLOCK(cs_vNodes)
+        {
             vNodesCopy = vNodes;
+            foreach(CNode* pnode, vNodesCopy)
+                pnode->AddRef();
+        }
         foreach(CNode* pnode, vNodesCopy)
         {
-            CheckForShutdown(0);
-            SOCKET hSocket = pnode->hSocket;
+            if (fShutdown)
+                return;
 
             //
             // Receive
             //
-            if (FD_ISSET(hSocket, &fdsetRecv))
+            if (pnode->hSocket == INVALID_SOCKET)
+                continue;
+            if (FD_ISSET(pnode->hSocket, &fdsetRecv) || FD_ISSET(pnode->hSocket, &fdsetError))
             {
                 TRY_CRITICAL_BLOCK(pnode->cs_vRecv)
                 {
@@ -641,26 +708,30 @@ void ThreadSocketHandler2(void* parg)
                     unsigned int nPos = vRecv.size();
 
                     // typical socket buffer is 8K-64K
-                    const unsigned int nBufSize = 0x10000;
-                    vRecv.resize(nPos + nBufSize);
-                    int nBytes = recv(hSocket, &vRecv[nPos], nBufSize, 0);
-                    vRecv.resize(nPos + max(nBytes, 0));
-                    if (nBytes == 0)
+                    char pchBuf[0x10000];
+                    int nBytes = recv(pnode->hSocket, pchBuf, sizeof(pchBuf), MSG_DONTWAIT);
+                    if (nBytes > 0)
+                    {
+                        vRecv.resize(nPos + nBytes);
+                        memcpy(&vRecv[nPos], pchBuf, nBytes);
+                        pnode->nLastRecv = GetTime();
+                    }
+                    else if (nBytes == 0)
                     {
                         // socket closed gracefully
                         if (!pnode->fDisconnect)
-                            printf("recv: socket closed\n");
-                        pnode->fDisconnect = true;
+                            printf("socket closed\n");
+                        pnode->CloseSocketDisconnect();
                     }
                     else if (nBytes < 0)
                     {
-                        // socket error
+                        // error
                         int nErr = WSAGetLastError();
                         if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
                         {
                             if (!pnode->fDisconnect)
-                                printf("recv failed: %d\n", nErr);
-                            pnode->fDisconnect = true;
+                                printf("socket recv error %d\n", nErr);
+                            pnode->CloseSocketDisconnect();
                         }
                     }
                 }
@@ -669,35 +740,66 @@ void ThreadSocketHandler2(void* parg)
             //
             // Send
             //
-            if (FD_ISSET(hSocket, &fdsetSend))
+            if (pnode->hSocket == INVALID_SOCKET)
+                continue;
+            if (FD_ISSET(pnode->hSocket, &fdsetSend))
             {
                 TRY_CRITICAL_BLOCK(pnode->cs_vSend)
                 {
                     CDataStream& vSend = pnode->vSend;
                     if (!vSend.empty())
                     {
-                        int nBytes = send(hSocket, &vSend[0], vSend.size(), 0);
+                        int nBytes = send(pnode->hSocket, &vSend[0], vSend.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
                         if (nBytes > 0)
                         {
                             vSend.erase(vSend.begin(), vSend.begin() + nBytes);
+                            pnode->nLastSend = GetTime();
                         }
-                        else if (nBytes == 0)
+                        else if (nBytes < 0)
                         {
-                            if (pnode->ReadyToDisconnect())
-                                pnode->vSend.clear();
-                        }
-                        else
-                        {
-                            printf("send error %d\n", nBytes);
-                            if (pnode->ReadyToDisconnect())
-                                pnode->vSend.clear();
+                            // error
+                            int nErr = WSAGetLastError();
+                            if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
+                            {
+                                printf("socket send error %d\n", nErr);
+                                pnode->CloseSocketDisconnect();
+                            }
                         }
                     }
                 }
             }
+
+            //
+            // Inactivity checking
+            //
+            if (pnode->vSend.empty())
+                pnode->nLastSendEmpty = GetTime();
+            if (GetTime() - pnode->nTimeConnected > 60)
+            {
+                if (pnode->nLastRecv == 0 || pnode->nLastSend == 0)
+                {
+                    printf("socket no message in first 60 seconds, %d %d\n", pnode->nLastRecv != 0, pnode->nLastSend != 0);
+                    pnode->fDisconnect = true;
+                }
+                else if (GetTime() - pnode->nLastSend > 90*60 && GetTime() - pnode->nLastSendEmpty > 90*60)
+                {
+                    printf("socket not sending\n");
+                    pnode->fDisconnect = true;
+                }
+                else if (GetTime() - pnode->nLastRecv > 90*60)
+                {
+                    printf("socket inactivity timeout\n");
+                    pnode->fDisconnect = true;
+                }
+            }
+        }
+        CRITICAL_BLOCK(cs_vNodes)
+        {
+            foreach(CNode* pnode, vNodesCopy)
+                pnode->Release();
         }
 
-
+        nThreadSocketHandlerHeartbeat = GetTime();
         Sleep(10);
     }
 }
@@ -715,141 +817,151 @@ void ThreadOpenConnections(void* parg)
 {
     IMPLEMENT_RANDOMIZE_STACK(ThreadOpenConnections(parg));
 
-    loop
+    try
     {
         vnThreadsRunning[1]++;
-        CheckForShutdown(1);
-        try
-        {
-            ThreadOpenConnections2(parg);
-            vnThreadsRunning[1]--;
-        }
-        catch (std::exception& e) {
-            vnThreadsRunning[1]--;
-            PrintException(&e, "ThreadOpenConnections()");
-        } catch (...) {
-            vnThreadsRunning[1]--;
-            PrintException(NULL, "ThreadOpenConnections()");
-        }
-        Sleep(5000);
+        ThreadOpenConnections2(parg);
+        vnThreadsRunning[1]--;
     }
+    catch (std::exception& e) {
+        vnThreadsRunning[1]--;
+        PrintException(&e, "ThreadOpenConnections()");
+    } catch (...) {
+        vnThreadsRunning[1]--;
+        PrintException(NULL, "ThreadOpenConnections()");
+    }
+
+    printf("ThreadOpenConnections exiting\n");
 }
 
 void ThreadOpenConnections2(void* parg)
 {
     printf("ThreadOpenConnections started\n");
 
-    // Connect to one specified address
-    while (mapArgs.count("/connect"))
+    // Connect to specific addresses
+    if (mapArgs.count("-connect"))
     {
-        OpenNetworkConnection(CAddress(mapArgs["/connect"].c_str()));
-        Sleep(10000);
+        for (int64 nLoop = 0;; nLoop++)
+        {
+            foreach(string strAddr, mapMultiArgs["-connect"])
+            {
+                CAddress addr(strAddr, NODE_NETWORK);
+                if (addr.IsValid())
+                    OpenNetworkConnection(addr);
+                for (int i = 0; i < 10 && i < nLoop; i++)
+                {
+                    Sleep(500);
+                    if (fShutdown)
+                        return;
+                }
+            }
+        }
+    }
+
+    // Connect to manually added nodes first
+    if (mapArgs.count("-addnode"))
+    {
+        foreach(string strAddr, mapMultiArgs["-addnode"])
+        {
+            CAddress addr(strAddr, NODE_NETWORK);
+            if (addr.IsValid())
+            {
+                OpenNetworkConnection(addr);
+                Sleep(500);
+                if (fShutdown)
+                    return;
+            }
+        }
     }
 
     // Initiate network connections
-    int nTry = 0;
-    bool fIRCOnly = false;
-    const int nMaxConnections = 15;
     loop
     {
         // Wait
         vnThreadsRunning[1]--;
         Sleep(500);
+        const int nMaxConnections = 15;
         while (vNodes.size() >= nMaxConnections || vNodes.size() >= mapAddresses.size())
         {
-            CheckForShutdown(1);
+            if (fShutdown)
+                return;
             Sleep(2000);
         }
         vnThreadsRunning[1]++;
-        CheckForShutdown(1);
-
+        if (fShutdown)
+            return;
 
         //
-        // The IP selection process is designed to limit vulnerability to address flooding.
-        // Any class C (a.b.c.?) has an equal chance of being chosen, then an IP is
-        // chosen within the class C.  An attacker may be able to allocate many IPs, but
-        // they would normally be concentrated in blocks of class C's.  They can hog the
-        // attention within their class C, but not the whole IP address space overall.
-        // A lone node in a class C will get as much attention as someone holding all 255
-        // IPs in another class C.
+        // Choose an address to connect to based on most recently seen
         //
+        CAddress addrConnect;
+        int64 nBest = INT64_MIN;
 
-        // Every other try is with IRC addresses only
-        fIRCOnly = !fIRCOnly;
-        if (mapIRCAddresses.empty())
-            fIRCOnly = false;
-        else if (nTry++ < 30 && vNodes.size() < nMaxConnections/2)
-            fIRCOnly = true;
+        // Do this here so we don't have to critsect vNodes inside mapAddresses critsect
+        set<unsigned int> setConnected;
+        CRITICAL_BLOCK(cs_vNodes)
+            foreach(CNode* pnode, vNodes)
+                setConnected.insert(pnode->addr.ip);
 
-        // Make a list of unique class C's
-        unsigned char pchIPCMask[4] = { 0xff, 0xff, 0xff, 0x00 };
-        unsigned int nIPCMask = *(unsigned int*)pchIPCMask;
-        vector<unsigned int> vIPC;
-        CRITICAL_BLOCK(cs_mapIRCAddresses)
         CRITICAL_BLOCK(cs_mapAddresses)
         {
-            vIPC.reserve(mapAddresses.size());
-            unsigned int nPrev = 0;
             foreach(const PAIRTYPE(vector<unsigned char>, CAddress)& item, mapAddresses)
             {
                 const CAddress& addr = item.second;
-                if (!addr.IsIPv4())
+                if (!addr.IsIPv4() || !addr.IsValid() || setConnected.count(addr.ip))
                     continue;
-                if (fIRCOnly && !mapIRCAddresses.count(item.first))
+                int64 nSinceLastSeen = GetAdjustedTime() - addr.nTime;
+                int64 nSinceLastTry = GetAdjustedTime() - addr.nLastTry;
+
+                // Randomize the order in a deterministic way, putting the standard port first
+                int64 nRandomizer = (uint64)(addr.nLastTry * 9567851 + addr.ip * 7789) % (30 * 60);
+                if (addr.port != DEFAULT_PORT)
+                    nRandomizer += 30 * 60;
+
+                // Last seen  Base retry frequency
+                //   <1 hour   10 min
+                //    1 hour    1 hour
+                //    4 hours   2 hours
+                //   24 hours   5 hours
+                //   48 hours   7 hours
+                //    7 days   13 hours
+                //   30 days   27 hours
+                //   90 days   46 hours
+                //  365 days   93 hours
+                int64 nDelay = (int64)(3600.0 * sqrt(fabs(nSinceLastSeen) / 3600.0) + nRandomizer);
+
+                // Fast reconnect for one hour after last seen
+                if (nSinceLastSeen < 60 * 60)
+                    nDelay = 10 * 60;
+
+                // Limit retry frequency
+                if (nSinceLastTry < nDelay)
                     continue;
 
-                // Taking advantage of mapAddresses being in sorted order,
-                // with IPs of the same class C grouped together.
-                unsigned int ipC = addr.ip & nIPCMask;
-                if (ipC != nPrev)
-                    vIPC.push_back(nPrev = ipC);
+                // If we have IRC, we'll be notified when they first come online,
+                // and again every 24 hours by the refresh broadcast.
+                if (nGotIRCAddresses > 0 && vNodes.size() >= 2 && nSinceLastSeen > 24 * 60 * 60)
+                    continue;
+
+                // Only try the old stuff if we don't have enough connections
+                if (vNodes.size() >= 2 && nSinceLastSeen > 7 * 24 * 60 * 60)
+                    continue;
+                if (vNodes.size() >= 5 && nSinceLastSeen > 24 * 60 * 60)
+                    continue;
+
+                // If multiple addresses are ready, prioritize by time since
+                // last seen and time since last tried.
+                int64 nScore = min(nSinceLastTry, (int64)24 * 60 * 60) - nSinceLastSeen - nRandomizer;
+                if (nScore > nBest)
+                {
+                    nBest = nScore;
+                    addrConnect = addr;
+                }
             }
         }
-        if (vIPC.empty())
-            continue;
 
-        // Choose a random class C
-        unsigned int ipC = vIPC[GetRand(vIPC.size())];
-
-        // Organize all addresses in the class C by IP
-        map<unsigned int, vector<CAddress> > mapIP;
-        CRITICAL_BLOCK(cs_mapIRCAddresses)
-        CRITICAL_BLOCK(cs_mapAddresses)
-        {
-            int64 nDelay = ((30 * 60) << vNodes.size());
-            if (!fIRCOnly)
-            {
-                nDelay *= 2;
-                if (vNodes.size() >= 3)
-                    nDelay *= 4;
-                if (!mapIRCAddresses.empty())
-                    nDelay *= 100;
-            }
-
-            for (map<vector<unsigned char>, CAddress>::iterator mi = mapAddresses.lower_bound(CAddress(ipC, 0).GetKey());
-                 mi != mapAddresses.upper_bound(CAddress(ipC | ~nIPCMask, 0xffff).GetKey());
-                 ++mi)
-            {
-                const CAddress& addr = (*mi).second;
-                if (fIRCOnly && !mapIRCAddresses.count((*mi).first))
-                    continue;
-
-                int64 nRandomizer = (addr.nLastFailed * addr.ip * 7777U) % 20000;
-                if (GetTime() - addr.nLastFailed > nDelay * nRandomizer / 10000)
-                    mapIP[addr.ip].push_back(addr);
-            }
-        }
-        if (mapIP.empty())
-            continue;
-
-        // Choose a random IP in the class C
-        map<unsigned int, vector<CAddress> >::iterator mi = mapIP.begin();
-        advance(mi, GetRand(mapIP.size()));
-
-        // Once we've chosen an IP, we'll try every given port before moving on
-        foreach(const CAddress& addrConnect, (*mi).second)
-            if (OpenNetworkConnection(addrConnect))
-                break;
+        if (addrConnect.IsValid())
+            OpenNetworkConnection(addrConnect);
     }
 }
 
@@ -858,14 +970,16 @@ bool OpenNetworkConnection(const CAddress& addrConnect)
     //
     // Initiate outbound network connection
     //
-    CheckForShutdown(1);
+    if (fShutdown)
+        return false;
     if (addrConnect.ip == addrLocalHost.ip || !addrConnect.IsIPv4() || FindNode(addrConnect.ip))
         return false;
 
     vnThreadsRunning[1]--;
     CNode* pnode = ConnectNode(addrConnect);
     vnThreadsRunning[1]++;
-    CheckForShutdown(1);
+    if (fShutdown)
+        return false;
     if (!pnode)
         return false;
     pnode->fNetworkNode = true;
@@ -903,56 +1017,63 @@ void ThreadMessageHandler(void* parg)
 {
     IMPLEMENT_RANDOMIZE_STACK(ThreadMessageHandler(parg));
 
-    loop
+    try
     {
         vnThreadsRunning[2]++;
-        CheckForShutdown(2);
-        try
-        {
-            ThreadMessageHandler2(parg);
-            vnThreadsRunning[2]--;
-        }
-        catch (std::exception& e) {
-            vnThreadsRunning[2]--;
-            PrintException(&e, "ThreadMessageHandler()");
-        } catch (...) {
-            vnThreadsRunning[2]--;
-            PrintException(NULL, "ThreadMessageHandler()");
-        }
-        Sleep(5000);
+        ThreadMessageHandler2(parg);
+        vnThreadsRunning[2]--;
     }
+    catch (std::exception& e) {
+        vnThreadsRunning[2]--;
+        PrintException(&e, "ThreadMessageHandler()");
+    } catch (...) {
+        vnThreadsRunning[2]--;
+        PrintException(NULL, "ThreadMessageHandler()");
+    }
+
+    printf("ThreadMessageHandler exiting\n");
 }
 
 void ThreadMessageHandler2(void* parg)
 {
     printf("ThreadMessageHandler started\n");
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL);
     loop
     {
         // Poll the connected nodes for messages
         vector<CNode*> vNodesCopy;
         CRITICAL_BLOCK(cs_vNodes)
+        {
             vNodesCopy = vNodes;
+            foreach(CNode* pnode, vNodesCopy)
+                pnode->AddRef();
+        }
         foreach(CNode* pnode, vNodesCopy)
         {
-            pnode->AddRef();
-
             // Receive messages
             TRY_CRITICAL_BLOCK(pnode->cs_vRecv)
                 ProcessMessages(pnode);
+            if (fShutdown)
+                return;
 
             // Send messages
             TRY_CRITICAL_BLOCK(pnode->cs_vSend)
                 SendMessages(pnode);
-
-            pnode->Release();
+            if (fShutdown)
+                return;
+        }
+        CRITICAL_BLOCK(cs_vNodes)
+        {
+            foreach(CNode* pnode, vNodesCopy)
+                pnode->Release();
         }
 
         // Wait and allow messages to bunch up
         vnThreadsRunning[2]--;
         Sleep(100);
         vnThreadsRunning[2]++;
-        CheckForShutdown(2);
+        if (fShutdown)
+            return;
     }
 }
 
@@ -964,12 +1085,13 @@ void ThreadMessageHandler2(void* parg)
 
 
 
-
-bool StartNode(string& strError)
+bool BindListenPort(string& strError)
 {
     strError = "";
+    int nOne = 1;
 
-    // Sockets startup
+#ifdef __WXMSW__
+    // Initialize Windows Sockets
     WSADATA wsadata;
     int ret = WSAStartup(MAKEWORD(2,2), &wsadata);
     if (ret != NO_ERROR)
@@ -978,26 +1100,7 @@ bool StartNode(string& strError)
         printf("%s\n", strError.c_str());
         return false;
     }
-
-    // Get local host ip
-    char pszHostName[255];
-    if (gethostname(pszHostName, 255) == SOCKET_ERROR)
-    {
-        strError = strprintf("Error: Unable to get IP address of this computer (gethostname returned error %d)", WSAGetLastError());
-        printf("%s\n", strError.c_str());
-        return false;
-    }
-    struct hostent* phostent = gethostbyname(pszHostName);
-    if (!phostent)
-    {
-        strError = strprintf("Error: Unable to get IP address of this computer (gethostbyname returned error %d)", WSAGetLastError());
-        printf("%s\n", strError.c_str());
-        return false;
-    }
-    addrLocalHost = CAddress(*(long*)(phostent->h_addr_list[0]),
-                             DEFAULT_PORT,
-                             nLocalServices);
-    printf("addrLocalHost = %s\n", addrLocalHost.ToString().c_str());
+#endif
 
     // Create socket for listening for incoming connections
     hListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -1008,30 +1111,47 @@ bool StartNode(string& strError)
         return false;
     }
 
+#if defined(__BSD__) || defined(__WXOSX__)
+    // Different way of disabling SIGPIPE on BSD
+    setsockopt(hListenSocket, SOL_SOCKET, SO_NOSIGPIPE, (void*)&nOne, sizeof(int));
+#endif
+
+#ifndef __WXMSW__
+    // Allow binding if the port is still in TIME_WAIT state after
+    // the program was closed and restarted.  Not an issue on windows.
+    setsockopt(hListenSocket, SOL_SOCKET, SO_REUSEADDR, (void*)&nOne, sizeof(int));
+#endif
+
+#ifdef __WXMSW__
     // Set to nonblocking, incoming connections will also inherit this
-    u_long nOne = 1;
-    if (ioctlsocket(hListenSocket, FIONBIO, &nOne) == SOCKET_ERROR)
+    if (ioctlsocket(hListenSocket, FIONBIO, (u_long*)&nOne) == SOCKET_ERROR)
+#else
+    if (fcntl(hListenSocket, F_SETFL, O_NONBLOCK) == SOCKET_ERROR)
+#endif
     {
-        strError = strprintf("Error: Couldn't set properties on socket for incoming connections (ioctlsocket returned error %d)", WSAGetLastError());
+        strError = strprintf("Error: Couldn't set properties on socket for incoming connections (error %d)", WSAGetLastError());
         printf("%s\n", strError.c_str());
         return false;
     }
 
     // The sockaddr_in structure specifies the address family,
     // IP address, and port for the socket that is being bound
-    int nRetryLimit = 15;
-    struct sockaddr_in sockaddr = addrLocalHost.GetSockAddr();
-    if (bind(hListenSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr)) == SOCKET_ERROR)
+    struct sockaddr_in sockaddr;
+    memset(&sockaddr, 0, sizeof(sockaddr));
+    sockaddr.sin_family = AF_INET;
+    sockaddr.sin_addr.s_addr = INADDR_ANY; // bind to all IPs on this computer
+    sockaddr.sin_port = DEFAULT_PORT;
+    if (::bind(hListenSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr)) == SOCKET_ERROR)
     {
         int nErr = WSAGetLastError();
         if (nErr == WSAEADDRINUSE)
-            strError = strprintf("Error: Unable to bind to port %s on this computer. The program is probably already running.", addrLocalHost.ToString().c_str());
+            strError = strprintf("Unable to bind to port %d on this computer.  Bitcoin is probably already running.", ntohs(sockaddr.sin_port));
         else
-            strError = strprintf("Error: Unable to bind to port %s on this computer (bind returned error %d)", addrLocalHost.ToString().c_str(), nErr);
+            strError = strprintf("Error: Unable to bind to port %d on this computer (bind returned error %d)", ntohs(sockaddr.sin_port), nErr);
         printf("%s\n", strError.c_str());
         return false;
     }
-    printf("bound to addrLocalHost = %s\n\n", addrLocalHost.ToString().c_str());
+    printf("Bound to port %d\n", ntohs(sockaddr.sin_port));
 
     // Listen for incoming connections
     if (listen(hListenSocket, SOMAXCONN) == SOCKET_ERROR)
@@ -1041,53 +1161,166 @@ bool StartNode(string& strError)
         return false;
     }
 
+    return true;
+}
+
+void StartNode(void* parg)
+{
+    if (pnodeLocalHost == NULL)
+        pnodeLocalHost = new CNode(INVALID_SOCKET, CAddress("127.0.0.1", nLocalServices));
+
+#ifdef __WXMSW__
+    // Get local host ip
+    char pszHostName[1000] = "";
+    if (gethostname(pszHostName, sizeof(pszHostName)) != SOCKET_ERROR)
+    {
+        struct hostent* phostent = gethostbyname(pszHostName);
+        if (phostent)
+        {
+            // Take the first IP that isn't loopback 127.x.x.x
+            for (int i = 0; phostent->h_addr_list[i] != NULL; i++)
+                printf("host ip %d: %s\n", i, CAddress(*(unsigned int*)phostent->h_addr_list[i]).ToStringIP().c_str());
+            for (int i = 0; phostent->h_addr_list[i] != NULL; i++)
+            {
+                CAddress addr(*(unsigned int*)phostent->h_addr_list[i], DEFAULT_PORT, nLocalServices);
+                if (addr.IsValid() && addr.GetByte(3) != 127)
+                {
+                    addrLocalHost = addr;
+                    break;
+                }
+            }
+        }
+    }
+#else
+    // Get local host ip
+    struct ifaddrs* myaddrs;
+    if (getifaddrs(&myaddrs) == 0)
+    {
+        for (struct ifaddrs* ifa = myaddrs; ifa != NULL; ifa = ifa->ifa_next)
+        {
+            if (ifa->ifa_addr == NULL) continue;
+            if ((ifa->ifa_flags & IFF_UP) == 0) continue;
+            if (strcmp(ifa->ifa_name, "lo") == 0) continue;
+            if (strcmp(ifa->ifa_name, "lo0") == 0) continue;
+            char pszIP[100];
+            if (ifa->ifa_addr->sa_family == AF_INET)
+            {
+                struct sockaddr_in* s4 = (struct sockaddr_in*)(ifa->ifa_addr);
+                if (inet_ntop(ifa->ifa_addr->sa_family, (void*)&(s4->sin_addr), pszIP, sizeof(pszIP)) != NULL)
+                    printf("ipv4 %s: %s\n", ifa->ifa_name, pszIP);
+
+                // Take the first IP that isn't loopback 127.x.x.x
+                CAddress addr(*(unsigned int*)&s4->sin_addr, DEFAULT_PORT, nLocalServices);
+                if (addr.IsValid() && addr.GetByte(3) != 127)
+                {
+                    addrLocalHost = addr;
+                    break;
+                }
+            }
+            else if (ifa->ifa_addr->sa_family == AF_INET6)
+            {
+                struct sockaddr_in6* s6 = (struct sockaddr_in6*)(ifa->ifa_addr);
+                if (inet_ntop(ifa->ifa_addr->sa_family, (void*)&(s6->sin6_addr), pszIP, sizeof(pszIP)) != NULL)
+                    printf("ipv6 %s: %s\n", ifa->ifa_name, pszIP);
+            }
+        }
+        freeifaddrs(myaddrs);
+    }
+#endif
+    printf("addrLocalHost = %s\n", addrLocalHost.ToString().c_str());
+
     // Get our external IP address for incoming connections
     if (fUseProxy)
     {
         // Proxies can't take incoming connections
         addrLocalHost.ip = CAddress("0.0.0.0").ip;
+        printf("addrLocalHost = %s\n", addrLocalHost.ToString().c_str());
     }
     else
     {
-        if (addrIncoming.ip)
+        if (addrIncoming.IsValid())
             addrLocalHost.ip = addrIncoming.ip;
 
         if (GetMyExternalIP(addrLocalHost.ip))
         {
             addrIncoming = addrLocalHost;
             CWalletDB().WriteSetting("addrIncoming", addrIncoming);
+            printf("addrLocalHost = %s\n", addrLocalHost.ToString().c_str());
         }
     }
-
-    // Get addresses from IRC and advertise ours
-    if (_beginthread(ThreadIRCSeed, 0, NULL) == -1)
-        printf("Error: _beginthread(ThreadIRCSeed) failed\n");
 
     //
     // Start threads
     //
-    if (_beginthread(ThreadSocketHandler, 0, NULL) == -1)
-    {
-        strError = "Error: _beginthread(ThreadSocketHandler) failed";
-        printf("%s\n", strError.c_str());
-        return false;
-    }
 
-    if (_beginthread(ThreadOpenConnections, 0, NULL) == -1)
-    {
-        strError = "Error: _beginthread(ThreadOpenConnections) failed";
-        printf("%s\n", strError.c_str());
-        return false;
-    }
+    // Get addresses from IRC and advertise ours
+    if (!CreateThread(ThreadIRCSeed, NULL))
+        printf("Error: CreateThread(ThreadIRCSeed) failed\n");
 
-    if (_beginthread(ThreadMessageHandler, 0, NULL) == -1)
-    {
-        strError = "Error: _beginthread(ThreadMessageHandler) failed";
-        printf("%s\n", strError.c_str());
-        return false;
-    }
+    // Send and receive from sockets, accept connections
+    pthread_t hThreadSocketHandler = CreateThread(ThreadSocketHandler, NULL, true);
 
-    return true;
+    // Initiate outbound connections
+    if (!CreateThread(ThreadOpenConnections, NULL))
+        printf("Error: CreateThread(ThreadOpenConnections) failed\n");
+
+    // Process messages
+    if (!CreateThread(ThreadMessageHandler, NULL))
+        printf("Error: CreateThread(ThreadMessageHandler) failed\n");
+
+    // Generate coins in the background
+    GenerateBitcoins(fGenerateBitcoins);
+
+    //
+    // Thread monitoring
+    // Not really needed anymore, the cause of the hanging was fixed
+    //
+    loop
+    {
+        Sleep(1000);
+        if (fShutdown)
+            return;
+        if (GetTime() - nThreadSocketHandlerHeartbeat > 15 * 60)
+        {
+            // First see if closing sockets will free it
+            printf("*** ThreadSocketHandler is stopped ***\n");
+            CRITICAL_BLOCK(cs_vNodes)
+            {
+                foreach(CNode* pnode, vNodes)
+                {
+                    bool fGot = false;
+                    TRY_CRITICAL_BLOCK(pnode->cs_vRecv)
+                        TRY_CRITICAL_BLOCK(pnode->cs_vSend)
+                            fGot = true;
+                    if (!fGot)
+                    {
+                        printf("*** closing socket\n");
+                        pnode->CloseSocketDisconnect();
+                    }
+                }
+            }
+            Sleep(10000);
+            if (fShutdown)
+                return;
+            if (GetTime() - nThreadSocketHandlerHeartbeat < 60)
+                continue;
+
+            // Hopefully it never comes to this.
+            // We know it'll always be hung in the recv or send call.
+            // cs_vRecv or cs_vSend may be left permanently unreleased,
+            // but we always only use TRY_CRITICAL_SECTION on them.
+            printf("*** Restarting ThreadSocketHandler ***\n");
+            TerminateThread(hThreadSocketHandler, 0);
+            #ifdef __WXMSW__
+            CloseHandle(hThreadSocketHandler);
+            #endif
+            vnThreadsRunning[0] = 0;
+
+            // Restart
+            hThreadSocketHandler = CreateThread(ThreadSocketHandler, NULL, true);
+            nThreadSocketHandlerHeartbeat = GetTime();
+        }
+    }
 }
 
 bool StopNode()
@@ -1096,39 +1329,43 @@ bool StopNode()
     fShutdown = true;
     nTransactionsUpdated++;
     int64 nStart = GetTime();
-    while (vnThreadsRunning[0] || vnThreadsRunning[2] || vnThreadsRunning[3])
+    while (vnThreadsRunning[0] > 0 || vnThreadsRunning[2] > 0 || vnThreadsRunning[3] > 0)
     {
-        if (GetTime() - nStart > 15)
+        if (GetTime() - nStart > 20)
             break;
         Sleep(20);
     }
-    if (vnThreadsRunning[0]) printf("ThreadSocketHandler still running\n");
-    if (vnThreadsRunning[1]) printf("ThreadOpenConnections still running\n");
-    if (vnThreadsRunning[2]) printf("ThreadMessageHandler still running\n");
-    if (vnThreadsRunning[3]) printf("ThreadBitcoinMiner still running\n");
-    while (vnThreadsRunning[2])
+    if (vnThreadsRunning[0] > 0) printf("ThreadSocketHandler still running\n");
+    if (vnThreadsRunning[1] > 0) printf("ThreadOpenConnections still running\n");
+    if (vnThreadsRunning[2] > 0) printf("ThreadMessageHandler still running\n");
+    if (vnThreadsRunning[3] > 0) printf("ThreadBitcoinMiner still running\n");
+    while (vnThreadsRunning[2] > 0)
         Sleep(20);
     Sleep(50);
 
-    // Sockets shutdown
-    WSACleanup();
     return true;
 }
 
-void CheckForShutdown(int n)
+class CNetCleanup
 {
-    if (fShutdown)
+public:
+    CNetCleanup()
     {
-        if (n != -1)
-            if (--vnThreadsRunning[n] < 0)
-                vnThreadsRunning[n] = 0;
-        if (n == 0)
-        {
-            foreach(CNode* pnode, vNodes)
+    }
+    ~CNetCleanup()
+    {
+        // Close sockets
+        foreach(CNode* pnode, vNodes)
+            if (pnode->hSocket != INVALID_SOCKET)
                 closesocket(pnode->hSocket);
-            closesocket(hListenSocket);
-        }
-        printf("Thread %d exiting\n", n);
-        _endthread();
+        if (hListenSocket != INVALID_SOCKET)
+            if (closesocket(hListenSocket) == SOCKET_ERROR)
+                printf("closesocket(hListenSocket) failed with error %d\n", WSAGetLastError());
+
+#ifdef __WXMSW__
+        // Shutdown Windows Sockets
+        WSACleanup();
+#endif
     }
 }
+instance_of_cnetcleanup;

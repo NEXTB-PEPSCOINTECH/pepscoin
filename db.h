@@ -17,7 +17,10 @@ extern map<string, string> mapAddressBook;
 extern bool fClient;
 
 
+extern unsigned int nWalletDBUpdated;
 extern DbEnv dbenv;
+
+
 extern void DBFlush(bool fShutdown);
 
 
@@ -29,8 +32,9 @@ protected:
     Db* pdb;
     string strFile;
     vector<DbTxn*> vTxn;
+    bool fReadOnly;
 
-    explicit CDB(const char* pszFile, const char* pszMode="r+", bool fTxn=false);
+    explicit CDB(const char* pszFile, const char* pszMode="r+");
     ~CDB() { Close(); }
 public:
     void Close();
@@ -74,6 +78,8 @@ protected:
     {
         if (!pdb)
             return false;
+        if (fReadOnly)
+            assert(("Write called on database in read-only mode", false));
 
         // Key
         CDataStream ssKey(SER_DISK);
@@ -101,6 +107,8 @@ protected:
     {
         if (!pdb)
             return false;
+        if (fReadOnly)
+            assert(("Erase called on database in read-only mode", false));
 
         // Key
         CDataStream ssKey(SER_DISK);
@@ -251,7 +259,7 @@ public:
 class CTxDB : public CDB
 {
 public:
-    CTxDB(const char* pszMode="r+", bool fTxn=false) : CDB(!fClient ? "blkindex.dat" : NULL, pszMode, fTxn) { }
+    CTxDB(const char* pszMode="r+") : CDB(!fClient ? "blkindex.dat" : NULL, pszMode) { }
 private:
     CTxDB(const CTxDB&);
     void operator=(const CTxDB&);
@@ -280,7 +288,7 @@ public:
 class CReviewDB : public CDB
 {
 public:
-    CReviewDB(const char* pszMode="r+", bool fTxn=false) : CDB("reviews.dat", pszMode, fTxn) { }
+    CReviewDB(const char* pszMode="r+") : CDB("reviews.dat", pszMode) { }
 private:
     CReviewDB(const CReviewDB&);
     void operator=(const CReviewDB&);
@@ -306,7 +314,7 @@ public:
 class CMarketDB : public CDB
 {
 public:
-    CMarketDB(const char* pszMode="r+", bool fTxn=false) : CDB("market.dat", pszMode, fTxn) { }
+    CMarketDB(const char* pszMode="r+") : CDB("market.dat", pszMode) { }
 private:
     CMarketDB(const CMarketDB&);
     void operator=(const CMarketDB&);
@@ -319,7 +327,7 @@ private:
 class CAddrDB : public CDB
 {
 public:
-    CAddrDB(const char* pszMode="r+", bool fTxn=false) : CDB("addr.dat", pszMode, fTxn) { }
+    CAddrDB(const char* pszMode="r+") : CDB("addr.dat", pszMode) { }
 private:
     CAddrDB(const CAddrDB&);
     void operator=(const CAddrDB&);
@@ -334,11 +342,11 @@ bool LoadAddresses();
 
 
 
+
 class CWalletDB : public CDB
 {
 public:
-    CWalletDB(const char* pszMode="r+", bool fTxn=false) : CDB("wallet.dat", pszMode, fTxn) { }
-    ~CWalletDB();
+    CWalletDB(const char* pszMode="r+") : CDB("wallet.dat", pszMode) { }
 private:
     CWalletDB(const CWalletDB&);
     void operator=(const CWalletDB&);
@@ -351,12 +359,14 @@ public:
 
     bool WriteName(const string& strAddress, const string& strName)
     {
+        nWalletDBUpdated++;
         mapAddressBook[strAddress] = strName;
         return Write(make_pair(string("name"), strAddress), strName);
     }
 
     bool EraseName(const string& strAddress)
     {
+        nWalletDBUpdated++;
         mapAddressBook.erase(strAddress);
         return Erase(make_pair(string("name"), strAddress));
     }
@@ -368,11 +378,13 @@ public:
 
     bool WriteTx(uint256 hash, const CWalletTx& wtx)
     {
+        nWalletDBUpdated++;
         return Write(make_pair(string("tx"), hash), wtx);
     }
 
     bool EraseTx(uint256 hash)
     {
+        nWalletDBUpdated++;
         return Erase(make_pair(string("tx"), hash));
     }
 
@@ -384,6 +396,7 @@ public:
 
     bool WriteKey(const vector<unsigned char>& vchPubKey, const CPrivKey& vchPrivKey)
     {
+        nWalletDBUpdated++;
         return Write(make_pair(string("key"), vchPubKey), vchPrivKey, false);
     }
 
@@ -395,6 +408,7 @@ public:
 
     bool WriteDefaultKey(const vector<unsigned char>& vchPubKey)
     {
+        nWalletDBUpdated++;
         return Write(string("defaultkey"), vchPubKey);
     }
 
@@ -407,6 +421,7 @@ public:
     template<typename T>
     bool WriteSetting(const string& strKey, const T& value)
     {
+        nWalletDBUpdated++;
         return Write(make_pair(string("setting"), strKey), value);
     }
 

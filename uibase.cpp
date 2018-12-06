@@ -7,6 +7,10 @@
 
 #include "uibase.h"
 
+#include "xpm/addressbook20.xpm"
+#include "xpm/check.xpm"
+#include "xpm/send20.xpm"
+
 ///////////////////////////////////////////////////////////////////////////
 
 CMainFrameBase::CMainFrameBase( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
@@ -41,7 +45,7 @@ CMainFrameBase::CMainFrameBase( wxWindow* parent, wxWindowID id, const wxString&
 	m_menuOptions->Append( m_menuOptionsChangeYourAddress );
 	
 	wxMenuItem* m_menuOptionsOptions;
-	m_menuOptionsOptions = new wxMenuItem( m_menuOptions, wxID_ANY, wxString( wxT("&Options...") ) , wxEmptyString, wxITEM_NORMAL );
+	m_menuOptionsOptions = new wxMenuItem( m_menuOptions, wxID_MENUOPTIONSOPTIONS, wxString( wxT("&Options...") ) , wxEmptyString, wxITEM_NORMAL );
 	m_menuOptions->Append( m_menuOptionsOptions );
 	
 	m_menubar->Append( m_menuOptions, wxT("&Options") );
@@ -60,8 +64,8 @@ CMainFrameBase::CMainFrameBase( wxWindow* parent, wxWindowID id, const wxString&
 	m_toolBar->SetToolSeparation( 1 );
 	m_toolBar->SetFont( wxFont( wxNORMAL_FONT->GetPointSize(), 70, 90, 90, false, wxEmptyString ) );
 	
-	m_toolBar->AddTool( wxID_BUTTONSEND, wxT("&Send Coins"), wxBitmap( wxT("send20"), wxBITMAP_TYPE_RESOURCE ), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString );
-	m_toolBar->AddTool( wxID_BUTTONRECEIVE, wxT("&Address Book"), wxBitmap( wxT("addressbook20"), wxBITMAP_TYPE_RESOURCE ), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString );
+	m_toolBar->AddTool( wxID_BUTTONSEND, wxT("&Send Coins"), wxBitmap( send20_xpm ), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString );
+	m_toolBar->AddTool( wxID_BUTTONRECEIVE, wxT("&Address Book"), wxBitmap( addressbook20_xpm ), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString );
 	m_toolBar->Realize();
 	
 	m_statusBar = this->CreateStatusBar( 1, wxST_SIZEGRIP, wxID_ANY );
@@ -80,12 +84,12 @@ CMainFrameBase::CMainFrameBase( wxWindow* parent, wxWindowID id, const wxString&
 	m_staticText32->Wrap( -1 );
 	bSizer85->Add( m_staticText32, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
 	
-	m_textCtrlAddress = new wxTextCtrl( this, wxID_TEXTCTRLADDRESS, wxEmptyString, wxDefaultPosition, wxSize( 250,-1 ), wxTE_READONLY );
+	m_textCtrlAddress = new wxTextCtrl( this, wxID_TEXTCTRLADDRESS, wxEmptyString, wxDefaultPosition, wxSize( 340,-1 ), wxTE_READONLY );
 	m_textCtrlAddress->SetBackgroundColour( wxSystemSettings::GetColour( wxSYS_COLOUR_MENU ) );
 	
 	bSizer85->Add( m_textCtrlAddress, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxLEFT, 5 );
 	
-	m_buttonCopy = new wxButton( this, wxID_BUTTONCOPY, wxT("&Copy to Clipboard"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT );
+	m_buttonCopy = new wxButton( this, wxID_BUTTONCOPY, wxT(" &Copy to Clipboard "), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT );
 	bSizer85->Add( m_buttonCopy, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
 	
 	m_button91 = new wxButton( this, wxID_BUTTONCHANGE, wxT("C&hange..."), wxDefaultPosition, wxDefaultSize, 0 );
@@ -112,7 +116,7 @@ CMainFrameBase::CMainFrameBase( wxWindow* parent, wxWindowID id, const wxString&
 	m_staticTextBalance = new wxStaticText( m_panel14, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( 120,15 ), wxALIGN_RIGHT|wxST_NO_AUTORESIZE );
 	m_staticTextBalance->Wrap( -1 );
 	m_staticTextBalance->SetFont( wxFont( 8, 70, 90, 90, false, wxEmptyString ) );
-	m_staticTextBalance->SetBackgroundColour( wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOW ) );
+	m_staticTextBalance->SetBackgroundColour( wxColour( 255, 255, 255 ) );
 	
 	bSizer66->Add( m_staticTextBalance, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
 	
@@ -139,7 +143,7 @@ CMainFrameBase::CMainFrameBase( wxWindow* parent, wxWindowID id, const wxString&
 	wxBoxSizer* bSizer157;
 	bSizer157 = new wxBoxSizer( wxVERTICAL );
 	
-	m_listCtrl = new wxListCtrl( m_panel7, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_NO_SORT_HEADER|wxLC_REPORT|wxLC_SORT_DESCENDING|wxALWAYS_SHOW_SB );
+	m_listCtrl = new wxListCtrl( m_panel7, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_NO_SORT_HEADER|wxLC_REPORT|wxLC_SORT_DESCENDING|wxVSCROLL );
 	bSizer157->Add( m_listCtrl, 1, wxEXPAND|wxALL, 5 );
 	
 	m_panel7->SetSizer( bSizer157 );
@@ -337,10 +341,10 @@ CTxDetailsDialogBase::CTxDetailsDialogBase( wxWindow* parent, wxWindowID id, con
 	bSizer64->Add( bSizer66, 1, wxEXPAND, 5 );
 	
 	wxBoxSizer* bSizer65;
-	bSizer65 = new wxBoxSizer( wxVERTICAL );
+	bSizer65 = new wxBoxSizer( wxHORIZONTAL );
 	
-	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( 85,25 ), 0 );
-	bSizer65->Add( m_buttonOK, 0, wxALL, 5 );
+	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
+	bSizer65->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer64->Add( bSizer65, 0, wxALIGN_RIGHT, 5 );
 	
@@ -424,21 +428,13 @@ COptionsDialogBase::COptionsDialogBase( wxWindow* parent, wxWindowID id, const w
 	
 	bSizer69->Add( m_checkBoxStartOnSystemStartup, 0, wxALL, 5 );
 	
-	m_checkBoxMinimizeToTray = new wxCheckBox( m_panelMain, wxID_ANY, wxT("&Minimize to the system tray instead of the taskbar"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_checkBoxMinimizeToTray = new wxCheckBox( m_panelMain, wxID_ANY, wxT("&Minimize to the tray instead of the taskbar"), wxDefaultPosition, wxDefaultSize, 0 );
 	
 	bSizer69->Add( m_checkBoxMinimizeToTray, 0, wxALL, 5 );
 	
-	wxBoxSizer* bSizer101;
-	bSizer101 = new wxBoxSizer( wxHORIZONTAL );
+	m_checkBoxMinimizeOnClose = new wxCheckBox( m_panelMain, wxID_ANY, wxT("M&inimize to the tray on close"), wxDefaultPosition, wxDefaultSize, 0 );
 	
-	
-	bSizer101->Add( 16, 0, 0, 0, 5 );
-	
-	m_checkBoxMinimizeOnClose = new wxCheckBox( m_panelMain, wxID_ANY, wxT("Mi&nimize to system tray on close"), wxDefaultPosition, wxDefaultSize, 0 );
-	
-	bSizer101->Add( m_checkBoxMinimizeOnClose, 0, wxALL|wxALIGN_CENTER_VERTICAL, 5 );
-	
-	bSizer69->Add( bSizer101, 1, wxEXPAND, 5 );
+	bSizer69->Add( m_checkBoxMinimizeOnClose, 0, wxALL|wxALIGN_CENTER_VERTICAL, 5 );
 	
 	wxBoxSizer* bSizer102;
 	bSizer102 = new wxBoxSizer( wxHORIZONTAL );
@@ -516,18 +512,14 @@ COptionsDialogBase::COptionsDialogBase( wxWindow* parent, wxWindowID id, const w
 	wxBoxSizer* bSizer58;
 	bSizer58 = new wxBoxSizer( wxHORIZONTAL );
 	
-	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( 85,25 ), 0 );
-	bSizer58->Add( m_buttonOK, 0, wxALL, 5 );
+	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
+	bSizer58->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer58->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer58->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonApply = new wxButton( this, wxID_APPLY, wxT("&Apply"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonApply->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer58->Add( m_buttonApply, 0, wxALL, 5 );
+	bSizer58->Add( m_buttonApply, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer55->Add( bSizer58, 0, wxALIGN_RIGHT, 5 );
 	
@@ -618,8 +610,8 @@ CAboutDialogBase::CAboutDialogBase( wxWindow* parent, wxWindowID id, const wxStr
 	
 	bSizer61->Add( 0, 0, 1, wxEXPAND, 5 );
 	
-	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( 85,25 ), 0 );
-	bSizer61->Add( m_buttonOK, 0, wxALL, 5 );
+	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
+	bSizer61->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer60->Add( bSizer61, 0, wxALIGN_RIGHT|wxEXPAND, 5 );
 	
@@ -655,9 +647,9 @@ CSendDialogBase::CSendDialogBase( wxWindow* parent, wxWindowID id, const wxStrin
 	
 	fgSizer1->Add( 0, 0, 0, wxEXPAND, 5 );
 	
-	m_staticText14 = new wxStaticText( this, wxID_ANY, wxT("Enter the recipient's IP address (e.g. 123.45.6.7) for online transfer with comments and confirmation, \nor Bitcoin address (e.g. 1NS17iag9jJgTHD1VXjvLCEnZuQ3rJED9L) if recipient is not online."), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticText14->Wrap( -1 );
-	fgSizer1->Add( m_staticText14, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
+	m_staticTextInstructions = new wxStaticText( this, wxID_ANY, wxT("Enter the recipient's IP address (e.g. 123.45.6.7) for online transfer with comments and confirmation, \nor Bitcoin address (e.g. 1NS17iag9jJgTHD1VXjvLCEnZuQ3rJED9L) if recipient is not online."), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextInstructions->Wrap( -1 );
+	fgSizer1->Add( m_staticTextInstructions, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
 	wxBoxSizer* bSizer47;
 	bSizer47 = new wxBoxSizer( wxHORIZONTAL );
@@ -666,7 +658,7 @@ CSendDialogBase::CSendDialogBase( wxWindow* parent, wxWindowID id, const wxStrin
 	
 	bSizer47->Add( 0, 0, 1, wxEXPAND, 5 );
 	
-	m_bitmapCheckMark = new wxStaticBitmap( this, wxID_ANY, wxICON( check ), wxDefaultPosition, wxSize( 16,16 ), 0 );
+	m_bitmapCheckMark = new wxStaticBitmap( this, wxID_ANY, wxBitmap( check_xpm ), wxDefaultPosition, wxSize( 16,16 ), 0 );
 	bSizer47->Add( m_bitmapCheckMark, 0, wxALL|wxALIGN_CENTER_VERTICAL, 5 );
 	
 	m_staticText36 = new wxStaticText( this, wxID_ANY, wxT("Pay &To:"), wxDefaultPosition, wxSize( -1,-1 ), wxALIGN_RIGHT );
@@ -681,11 +673,16 @@ CSendDialogBase::CSendDialogBase( wxWindow* parent, wxWindowID id, const wxStrin
 	m_textCtrlAddress = new wxTextCtrl( this, wxID_TEXTCTRLPAYTO, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
 	bSizer19->Add( m_textCtrlAddress, 1, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
 	
+	wxBoxSizer* bSizer66;
+	bSizer66 = new wxBoxSizer( wxHORIZONTAL );
+	
 	m_buttonPaste = new wxButton( this, wxID_BUTTONPASTE, wxT("&Paste"), wxDefaultPosition, wxSize( -1,-1 ), wxBU_EXACTFIT );
-	bSizer19->Add( m_buttonPaste, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
+	bSizer66->Add( m_buttonPaste, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxEXPAND, 5 );
 	
 	m_buttonAddress = new wxButton( this, wxID_BUTTONADDRESSBOOK, wxT(" Address &Book..."), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizer19->Add( m_buttonAddress, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
+	bSizer66->Add( m_buttonAddress, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxEXPAND, 5 );
+	
+	bSizer19->Add( bSizer66, 0, wxALIGN_CENTER_VERTICAL, 5 );
 	
 	fgSizer1->Add( bSizer19, 1, wxEXPAND|wxRIGHT, 5 );
 	
@@ -763,14 +760,11 @@ CSendDialogBase::CSendDialogBase( wxWindow* parent, wxWindowID id, const wxStrin
 	
 	m_buttonSend = new wxButton( this, wxID_BUTTONSEND, wxT("&Send"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
 	m_buttonSend->SetFont( wxFont( wxNORMAL_FONT->GetPointSize(), 70, 90, 90, false, wxEmptyString ) );
-	m_buttonSend->SetMinSize( wxSize( 85,25 ) );
 	
-	bSizer23->Add( m_buttonSend, 0, wxALL, 5 );
+	bSizer23->Add( m_buttonSend, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer23->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer23->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer21->Add( bSizer23, 0, wxEXPAND, 5 );
 	
@@ -829,14 +823,11 @@ CSendingDialogBase::CSendingDialogBase( wxWindow* parent, wxWindowID id, const w
 	
 	m_buttonOK = new wxButton( this, wxID_ANY, wxT("OK"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_buttonOK->Enable( false );
-	m_buttonOK->SetMinSize( wxSize( 85,25 ) );
 	
-	bSizer69->Add( m_buttonOK, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer69->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer68->Add( bSizer69, 0, wxEXPAND, 5 );
 	
@@ -883,30 +874,21 @@ CYourAddressDialogBase::CYourAddressDialogBase( wxWindow* parent, wxWindowID id,
 	bSizer69->Add( 0, 0, 1, wxEXPAND, 5 );
 	
 	m_buttonRename = new wxButton( this, wxID_BUTTONRENAME, wxT("&Edit..."), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonRename->SetMinSize( wxSize( 85,25 ) );
+	bSizer69->Add( m_buttonRename, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
-	bSizer69->Add( m_buttonRename, 0, wxALL, 5 );
+	m_buttonNew = new wxButton( this, wxID_BUTTONNEW, wxT(" &New Address... "), wxDefaultPosition, wxSize( -1,-1 ), 0 );
+	bSizer69->Add( m_buttonNew, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
-	m_buttonNew = new wxButton( this, wxID_BUTTONNEW, wxT("&New Address..."), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonNew->SetMinSize( wxSize( 110,25 ) );
-	
-	bSizer69->Add( m_buttonNew, 0, wxALL, 5 );
-	
-	m_buttonCopy = new wxButton( this, wxID_BUTTONCOPY, wxT("&Copy to Clipboard"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonCopy->SetMinSize( wxSize( 120,25 ) );
-	
-	bSizer69->Add( m_buttonCopy, 0, wxALL, 5 );
+	m_buttonCopy = new wxButton( this, wxID_BUTTONCOPY, wxT(" &Copy to Clipboard "), wxDefaultPosition, wxSize( -1,-1 ), 0 );
+	bSizer69->Add( m_buttonCopy, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonOK->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer69->Add( m_buttonOK, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
 	m_buttonCancel->Hide();
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
 	
-	bSizer69->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer68->Add( bSizer69, 0, wxEXPAND, 5 );
 	
@@ -965,29 +947,19 @@ CAddressBookDialogBase::CAddressBookDialogBase( wxWindow* parent, wxWindowID id,
 	bSizer69->Add( 0, 0, 1, wxEXPAND, 5 );
 	
 	m_buttonEdit = new wxButton( this, wxID_BUTTONEDIT, wxT("&Edit..."), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonEdit->SetMinSize( wxSize( 85,25 ) );
+	bSizer69->Add( m_buttonEdit, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
-	bSizer69->Add( m_buttonEdit, 0, wxALL, 5 );
-	
-	m_buttonNew = new wxButton( this, wxID_BUTTONNEW, wxT("&New Address..."), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonNew->SetMinSize( wxSize( 110,25 ) );
-	
-	bSizer69->Add( m_buttonNew, 0, wxALL, 5 );
+	m_buttonNew = new wxButton( this, wxID_BUTTONNEW, wxT(" &New Address... "), wxDefaultPosition, wxDefaultSize, 0 );
+	bSizer69->Add( m_buttonNew, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonDelete = new wxButton( this, wxID_BUTTONDELETE, wxT("&Delete"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonDelete->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer69->Add( m_buttonDelete, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonDelete, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonOK->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer69->Add( m_buttonOK, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer69->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer69->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer68->Add( bSizer69, 0, wxEXPAND, 5 );
 	
@@ -1385,19 +1357,13 @@ CEditProductDialogBase::CEditProductDialogBase( wxWindow* parent, wxWindowID id,
 	bSizer26 = new wxBoxSizer( wxHORIZONTAL );
 	
 	m_buttonOK = new wxButton( this, wxID_BUTTONSEND, wxT("&Send"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonOK->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer26->Add( m_buttonOK, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonPreview = new wxButton( this, wxID_BUTTONPREVIEW, wxT("&Preview"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonPreview->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer26->Add( m_buttonPreview, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonPreview, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer26->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer20->Add( bSizer26, 0, wxALIGN_RIGHT, 5 );
 	
@@ -1582,10 +1548,10 @@ CViewProductDialogBase::CViewProductDialogBase( wxWindow* parent, wxWindowID id,
 	bSizer25 = new wxBoxSizer( wxHORIZONTAL );
 	
 	m_buttonSubmitForm = new wxButton( m_scrolledWindow, wxID_BUTTONSAMPLE, wxT("&Submit"), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizer25->Add( m_buttonSubmitForm, 0, wxALL, 5 );
+	bSizer25->Add( m_buttonSubmitForm, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancelForm = new wxButton( m_scrolledWindow, wxID_CANCEL2, wxT("Cancel"), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizer25->Add( m_buttonCancelForm, 0, wxALL, 5 );
+	bSizer25->Add( m_buttonCancelForm, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer21->Add( bSizer25, 0, wxALIGN_CENTER_HORIZONTAL, 5 );
 	
@@ -1601,19 +1567,14 @@ CViewProductDialogBase::CViewProductDialogBase( wxWindow* parent, wxWindowID id,
 	
 	m_buttonBack = new wxButton( this, wxID_BUTTONBACK, wxT("< &Back  "), wxDefaultPosition, wxDefaultSize, 0 );
 	m_buttonBack->Enable( false );
-	m_buttonBack->SetMinSize( wxSize( 85,25 ) );
 	
-	bSizer26->Add( m_buttonBack, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonBack, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonNext = new wxButton( this, wxID_BUTTONNEXT, wxT("  &Next >"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonNext->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer26->Add( m_buttonNext, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonNext, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer26->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer20->Add( bSizer26, 0, wxALIGN_RIGHT, 5 );
 	
@@ -1658,9 +1619,7 @@ CViewOrderDialogBase::CViewOrderDialogBase( wxWindow* parent, wxWindowID id, con
 	bSizer26 = new wxBoxSizer( wxHORIZONTAL );
 	
 	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonOK->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer26->Add( m_buttonOK, 0, wxALL, 5 );
+	bSizer26->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer20->Add( bSizer26, 0, wxALIGN_RIGHT, 5 );
 	
@@ -1716,14 +1675,10 @@ CEditReviewDialogBase::CEditReviewDialogBase( wxWindow* parent, wxWindowID id, c
 	bSizer113 = new wxBoxSizer( wxHORIZONTAL );
 	
 	m_buttonSubmit = new wxButton( this, wxID_SUBMIT, wxT("&Submit"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonSubmit->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer113->Add( m_buttonSubmit, 0, wxALL, 5 );
+	bSizer113->Add( m_buttonSubmit, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer113->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer113->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer112->Add( bSizer113, 0, wxALIGN_RIGHT, 5 );
 	
@@ -1742,166 +1697,6 @@ CEditReviewDialogBase::~CEditReviewDialogBase()
 	m_textCtrlReview->Disconnect( wxEVT_KEY_DOWN, wxKeyEventHandler( CEditReviewDialogBase::OnKeyDown ), NULL, this );
 	m_buttonSubmit->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CEditReviewDialogBase::OnButtonSubmit ), NULL, this );
 	m_buttonCancel->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CEditReviewDialogBase::OnButtonCancel ), NULL, this );
-}
-
-CPokerLobbyDialogBase::CPokerLobbyDialogBase( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
-{
-	this->SetSizeHints( wxDefaultSize, wxDefaultSize );
-	this->SetBackgroundColour( wxSystemSettings::GetColour( wxSYS_COLOUR_BTNFACE ) );
-	
-	wxBoxSizer* bSizer156;
-	bSizer156 = new wxBoxSizer( wxHORIZONTAL );
-	
-	m_treeCtrl = new wxTreeCtrl( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTR_HAS_BUTTONS|wxTR_HIDE_ROOT|wxTR_LINES_AT_ROOT );
-	m_treeCtrl->SetMinSize( wxSize( 130,-1 ) );
-	
-	bSizer156->Add( m_treeCtrl, 0, wxEXPAND|wxTOP|wxBOTTOM|wxLEFT, 5 );
-	
-	wxBoxSizer* bSizer172;
-	bSizer172 = new wxBoxSizer( wxVERTICAL );
-	
-	m_listCtrl = new wxListCtrl( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_NO_SORT_HEADER|wxLC_REPORT );
-	bSizer172->Add( m_listCtrl, 1, wxEXPAND|wxALL, 5 );
-	
-	m_buttonNewTable = new wxButton( this, wxID_OPENNEWTABLE, wxT("&Open New Table"), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizer172->Add( m_buttonNewTable, 0, wxALL, 5 );
-	
-	bSizer156->Add( bSizer172, 1, wxEXPAND, 5 );
-	
-	this->SetSizer( bSizer156 );
-	this->Layout();
-	
-	// Connect Events
-	m_treeCtrl->Connect( wxEVT_COMMAND_TREE_SEL_CHANGED, wxTreeEventHandler( CPokerLobbyDialogBase::OnTreeSelChanged ), NULL, this );
-	m_listCtrl->Connect( wxEVT_COMMAND_LIST_ITEM_ACTIVATED, wxListEventHandler( CPokerLobbyDialogBase::OnListItemActivated ), NULL, this );
-	m_listCtrl->Connect( wxEVT_COMMAND_LIST_ITEM_SELECTED, wxListEventHandler( CPokerLobbyDialogBase::OnListItemSelected ), NULL, this );
-	m_buttonNewTable->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerLobbyDialogBase::OnButtonNewTable ), NULL, this );
-}
-
-CPokerLobbyDialogBase::~CPokerLobbyDialogBase()
-{
-	// Disconnect Events
-	m_treeCtrl->Disconnect( wxEVT_COMMAND_TREE_SEL_CHANGED, wxTreeEventHandler( CPokerLobbyDialogBase::OnTreeSelChanged ), NULL, this );
-	m_listCtrl->Disconnect( wxEVT_COMMAND_LIST_ITEM_ACTIVATED, wxListEventHandler( CPokerLobbyDialogBase::OnListItemActivated ), NULL, this );
-	m_listCtrl->Disconnect( wxEVT_COMMAND_LIST_ITEM_SELECTED, wxListEventHandler( CPokerLobbyDialogBase::OnListItemSelected ), NULL, this );
-	m_buttonNewTable->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerLobbyDialogBase::OnButtonNewTable ), NULL, this );
-}
-
-CPokerDialogBase::CPokerDialogBase( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxFrame( parent, id, title, pos, size, style )
-{
-	this->SetSizeHints( wxDefaultSize, wxDefaultSize );
-	
-	wxBoxSizer* bSizer174;
-	bSizer174 = new wxBoxSizer( wxVERTICAL );
-	
-	m_checkSitOut = new wxCheckBox( this, wxID_ANY, wxT("Deal Me Out"), wxDefaultPosition, wxDefaultSize, 0 );
-	
-	bSizer174->Add( m_checkSitOut, 0, wxALL, 5 );
-	
-	m_buttonDealHand = new wxButton( this, wxID_DEALHAND, wxT("&Deal Hand"), wxDefaultPosition, wxSize( 150,25 ), 0 );
-	bSizer174->Add( m_buttonDealHand, 0, wxALL, 5 );
-	
-	m_buttonFold = new wxButton( this, wxID_FOLD, wxT("&Fold"), wxDefaultPosition, wxSize( 80,25 ), 0 );
-	bSizer174->Add( m_buttonFold, 0, wxALL, 5 );
-	
-	m_buttonCall = new wxButton( this, wxID_CALL, wxT("&Call"), wxDefaultPosition, wxSize( 80,25 ), 0 );
-	bSizer174->Add( m_buttonCall, 0, wxALL, 5 );
-	
-	m_buttonRaise = new wxButton( this, wxID_RAISE, wxT("&Raise"), wxDefaultPosition, wxSize( 80,25 ), 0 );
-	bSizer174->Add( m_buttonRaise, 0, wxALL, 5 );
-	
-	m_buttonLeaveTable = new wxButton( this, wxID_LEAVETABLE, wxT("&Leave Table"), wxDefaultPosition, wxSize( 90,25 ), 0 );
-	bSizer174->Add( m_buttonLeaveTable, 0, wxALL, 5 );
-	
-	m_textDitchPlayer = new wxTextCtrl( this, wxID_DITCHPLAYER, wxEmptyString, wxDefaultPosition, wxSize( 45,-1 ), wxTE_PROCESS_ENTER );
-	bSizer174->Add( m_textDitchPlayer, 0, wxALL, 5 );
-	
-	m_checkPreFold = new wxCheckBox( this, wxID_ANY, wxT("FOLD"), wxDefaultPosition, wxSize( 100,-1 ), 0 );
-	
-	bSizer174->Add( m_checkPreFold, 0, wxALL, 5 );
-	
-	m_checkPreCall = new wxCheckBox( this, wxID_ANY, wxT("CALL"), wxDefaultPosition, wxSize( 100,-1 ), 0 );
-	
-	bSizer174->Add( m_checkPreCall, 0, wxALL, 5 );
-	
-	m_checkPreCallAny = new wxCheckBox( this, wxID_ANY, wxT("CALL ANY"), wxDefaultPosition, wxSize( 100,-1 ), 0 );
-	
-	bSizer174->Add( m_checkPreCallAny, 0, wxALL, 5 );
-	
-	m_checkPreRaise = new wxCheckBox( this, wxID_ANY, wxT("RAISE"), wxDefaultPosition, wxSize( 100,-1 ), 0 );
-	
-	bSizer174->Add( m_checkPreRaise, 0, wxALL, 5 );
-	
-	m_checkPreRaiseAny = new wxCheckBox( this, wxID_ANY, wxT("RAISE ANY"), wxDefaultPosition, wxSize( 100,-1 ), 0 );
-	
-	bSizer174->Add( m_checkPreRaiseAny, 0, wxALL, 5 );
-	
-	this->SetSizer( bSizer174 );
-	this->Layout();
-	m_statusBar = this->CreateStatusBar( 1, wxST_SIZEGRIP, wxID_ANY );
-	
-	// Connect Events
-	this->Connect( wxEVT_CLOSE_WINDOW, wxCloseEventHandler( CPokerDialogBase::OnClose ) );
-	this->Connect( wxEVT_LEFT_DOWN, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_LEFT_UP, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_MIDDLE_DOWN, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_MIDDLE_UP, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_RIGHT_DOWN, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_RIGHT_UP, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_MOTION, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_LEFT_DCLICK, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_MIDDLE_DCLICK, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_RIGHT_DCLICK, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_LEAVE_WINDOW, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_ENTER_WINDOW, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_MOUSEWHEEL, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Connect( wxEVT_PAINT, wxPaintEventHandler( CPokerDialogBase::OnPaint ) );
-	this->Connect( wxEVT_SIZE, wxSizeEventHandler( CPokerDialogBase::OnSize ) );
-	m_checkSitOut->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckSitOut ), NULL, this );
-	m_buttonDealHand->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonDealHand ), NULL, this );
-	m_buttonFold->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonFold ), NULL, this );
-	m_buttonCall->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonCall ), NULL, this );
-	m_buttonRaise->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonRaise ), NULL, this );
-	m_buttonLeaveTable->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonLeaveTable ), NULL, this );
-	m_textDitchPlayer->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( CPokerDialogBase::OnDitchPlayer ), NULL, this );
-	m_checkPreFold->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreFold ), NULL, this );
-	m_checkPreCall->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreCall ), NULL, this );
-	m_checkPreCallAny->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreCallAny ), NULL, this );
-	m_checkPreRaise->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreRaise ), NULL, this );
-	m_checkPreRaiseAny->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreRaiseAny ), NULL, this );
-}
-
-CPokerDialogBase::~CPokerDialogBase()
-{
-	// Disconnect Events
-	this->Disconnect( wxEVT_CLOSE_WINDOW, wxCloseEventHandler( CPokerDialogBase::OnClose ) );
-	this->Disconnect( wxEVT_LEFT_DOWN, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_LEFT_UP, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_MIDDLE_DOWN, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_MIDDLE_UP, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_RIGHT_DOWN, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_RIGHT_UP, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_MOTION, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_LEFT_DCLICK, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_MIDDLE_DCLICK, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_RIGHT_DCLICK, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_LEAVE_WINDOW, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_ENTER_WINDOW, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_MOUSEWHEEL, wxMouseEventHandler( CPokerDialogBase::OnMouseEvents ) );
-	this->Disconnect( wxEVT_PAINT, wxPaintEventHandler( CPokerDialogBase::OnPaint ) );
-	this->Disconnect( wxEVT_SIZE, wxSizeEventHandler( CPokerDialogBase::OnSize ) );
-	m_checkSitOut->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckSitOut ), NULL, this );
-	m_buttonDealHand->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonDealHand ), NULL, this );
-	m_buttonFold->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonFold ), NULL, this );
-	m_buttonCall->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonCall ), NULL, this );
-	m_buttonRaise->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonRaise ), NULL, this );
-	m_buttonLeaveTable->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnButtonLeaveTable ), NULL, this );
-	m_textDitchPlayer->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( CPokerDialogBase::OnDitchPlayer ), NULL, this );
-	m_checkPreFold->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreFold ), NULL, this );
-	m_checkPreCall->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreCall ), NULL, this );
-	m_checkPreCallAny->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreCallAny ), NULL, this );
-	m_checkPreRaise->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreRaise ), NULL, this );
-	m_checkPreRaiseAny->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( CPokerDialogBase::OnCheckPreRaiseAny ), NULL, this );
 }
 
 CGetTextFromUserDialogBase::CGetTextFromUserDialogBase( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxDialog( parent, id, title, pos, size, style )
@@ -1947,14 +1742,10 @@ CGetTextFromUserDialogBase::CGetTextFromUserDialogBase( wxWindow* parent, wxWind
 	bSizer80->Add( 0, 0, 1, wxEXPAND, 5 );
 	
 	m_buttonOK = new wxButton( this, wxID_OK, wxT("OK"), wxDefaultPosition, wxSize( -1,-1 ), 0 );
-	m_buttonOK->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer80->Add( m_buttonOK, 0, wxALL, 5 );
+	bSizer80->Add( m_buttonOK, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	m_buttonCancel = new wxButton( this, wxID_CANCEL, wxT("Cancel"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_buttonCancel->SetMinSize( wxSize( 85,25 ) );
-	
-	bSizer80->Add( m_buttonCancel, 0, wxALL, 5 );
+	bSizer80->Add( m_buttonCancel, 0, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 	
 	bSizer79->Add( bSizer80, 0, wxEXPAND, 5 );
 	

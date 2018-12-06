@@ -37,65 +37,58 @@
 #include <wx/statbmp.h>
 #include <wx/combobox.h>
 #include <wx/richtext/richtextctrl.h>
-#include <wx/treectrl.h>
 
 ///////////////////////////////////////////////////////////////////////////
 
 #define wxID_MAINFRAME 1000
 #define wxID_VIEWSHOWGENERATED 1001
 #define wxID_OPTIONSGENERATEBITCOINS 1002
-#define wxID_BUTTONSEND 1003
-#define wxID_BUTTONRECEIVE 1004
-#define wxID_TEXTCTRLADDRESS 1005
-#define wxID_BUTTONCOPY 1006
-#define wxID_BUTTONCHANGE 1007
-#define wxID_TRANSACTIONFEE 1008
-#define wxID_PROXYIP 1009
-#define wxID_PROXYPORT 1010
-#define wxID_TEXTCTRLPAYTO 1011
-#define wxID_BUTTONPASTE 1012
-#define wxID_BUTTONADDRESSBOOK 1013
-#define wxID_TEXTCTRLAMOUNT 1014
-#define wxID_CHOICETRANSFERTYPE 1015
-#define wxID_LISTCTRL 1016
-#define wxID_BUTTONRENAME 1017
-#define wxID_BUTTONNEW 1018
-#define wxID_BUTTONEDIT 1019
-#define wxID_BUTTONDELETE 1020
-#define wxID_DEL0 1021
-#define wxID_DEL1 1022
-#define wxID_DEL2 1023
-#define wxID_DEL3 1024
-#define wxID_DEL4 1025
-#define wxID_DEL5 1026
-#define wxID_DEL6 1027
-#define wxID_DEL7 1028
-#define wxID_DEL8 1029
-#define wxID_DEL9 1030
-#define wxID_DEL10 1031
-#define wxID_DEL11 1032
-#define wxID_DEL12 1033
-#define wxID_DEL13 1034
-#define wxID_DEL14 1035
-#define wxID_DEL15 1036
-#define wxID_DEL16 1037
-#define wxID_DEL17 1038
-#define wxID_DEL18 1039
-#define wxID_DEL19 1040
-#define wxID_BUTTONPREVIEW 1041
-#define wxID_BUTTONSAMPLE 1042
-#define wxID_CANCEL2 1043
-#define wxID_BUTTONBACK 1044
-#define wxID_BUTTONNEXT 1045
-#define wxID_SUBMIT 1046
-#define wxID_OPENNEWTABLE 1047
-#define wxID_DEALHAND 1048
-#define wxID_FOLD 1049
-#define wxID_CALL 1050
-#define wxID_RAISE 1051
-#define wxID_LEAVETABLE 1052
-#define wxID_DITCHPLAYER 1053
-#define wxID_TEXTCTRL 1054
+#define wxID_MENUOPTIONSOPTIONS 1003
+#define wxID_BUTTONSEND 1004
+#define wxID_BUTTONRECEIVE 1005
+#define wxID_TEXTCTRLADDRESS 1006
+#define wxID_BUTTONCOPY 1007
+#define wxID_BUTTONCHANGE 1008
+#define wxID_TRANSACTIONFEE 1009
+#define wxID_PROXYIP 1010
+#define wxID_PROXYPORT 1011
+#define wxID_TEXTCTRLPAYTO 1012
+#define wxID_BUTTONPASTE 1013
+#define wxID_BUTTONADDRESSBOOK 1014
+#define wxID_TEXTCTRLAMOUNT 1015
+#define wxID_CHOICETRANSFERTYPE 1016
+#define wxID_LISTCTRL 1017
+#define wxID_BUTTONRENAME 1018
+#define wxID_BUTTONNEW 1019
+#define wxID_BUTTONEDIT 1020
+#define wxID_BUTTONDELETE 1021
+#define wxID_DEL0 1022
+#define wxID_DEL1 1023
+#define wxID_DEL2 1024
+#define wxID_DEL3 1025
+#define wxID_DEL4 1026
+#define wxID_DEL5 1027
+#define wxID_DEL6 1028
+#define wxID_DEL7 1029
+#define wxID_DEL8 1030
+#define wxID_DEL9 1031
+#define wxID_DEL10 1032
+#define wxID_DEL11 1033
+#define wxID_DEL12 1034
+#define wxID_DEL13 1035
+#define wxID_DEL14 1036
+#define wxID_DEL15 1037
+#define wxID_DEL16 1038
+#define wxID_DEL17 1039
+#define wxID_DEL18 1040
+#define wxID_DEL19 1041
+#define wxID_BUTTONPREVIEW 1042
+#define wxID_BUTTONSAMPLE 1043
+#define wxID_CANCEL2 1044
+#define wxID_BUTTONBACK 1045
+#define wxID_BUTTONNEXT 1046
+#define wxID_SUBMIT 1047
+#define wxID_TEXTCTRL 1048
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CMainFrameBase
@@ -211,7 +204,6 @@ class COptionsDialogBase : public wxDialog
 		wxStaticText* m_staticText35;
 		wxCheckBox* m_checkBoxStartOnSystemStartup;
 		wxCheckBox* m_checkBoxMinimizeToTray;
-		
 		wxCheckBox* m_checkBoxMinimizeOnClose;
 		wxCheckBox* m_checkBoxUseProxy;
 		
@@ -285,7 +277,7 @@ class CSendDialogBase : public wxDialog
 	protected:
 		
 		
-		wxStaticText* m_staticText14;
+		wxStaticText* m_staticTextInstructions;
 		
 		wxStaticBitmap* m_bitmapCheckMark;
 		wxStaticText* m_staticText36;
@@ -649,78 +641,6 @@ class CEditReviewDialogBase : public wxFrame
 	public:
 		CEditReviewDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = wxT("Enter Review"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 630,440 ), long style = wxDEFAULT_FRAME_STYLE|wxRESIZE_BORDER|wxTAB_TRAVERSAL );
 		~CEditReviewDialogBase();
-	
-};
-
-///////////////////////////////////////////////////////////////////////////////
-/// Class CPokerLobbyDialogBase
-///////////////////////////////////////////////////////////////////////////////
-class CPokerLobbyDialogBase : public wxFrame 
-{
-	private:
-	
-	protected:
-		wxTreeCtrl* m_treeCtrl;
-		wxListCtrl* m_listCtrl;
-		wxButton* m_buttonNewTable;
-		
-		// Virtual event handlers, overide them in your derived class
-		virtual void OnTreeSelChanged( wxTreeEvent& event ){ event.Skip(); }
-		virtual void OnListItemActivated( wxListEvent& event ){ event.Skip(); }
-		virtual void OnListItemSelected( wxListEvent& event ){ event.Skip(); }
-		virtual void OnButtonNewTable( wxCommandEvent& event ){ event.Skip(); }
-		
-	
-	public:
-		CPokerLobbyDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = wxT("Poker Lobby"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 586,457 ), long style = wxDEFAULT_FRAME_STYLE|wxTAB_TRAVERSAL );
-		~CPokerLobbyDialogBase();
-	
-};
-
-///////////////////////////////////////////////////////////////////////////////
-/// Class CPokerDialogBase
-///////////////////////////////////////////////////////////////////////////////
-class CPokerDialogBase : public wxFrame 
-{
-	private:
-	
-	protected:
-		wxButton* m_buttonDealHand;
-		wxButton* m_buttonFold;
-		wxButton* m_buttonCall;
-		wxButton* m_buttonRaise;
-		wxButton* m_buttonLeaveTable;
-		wxTextCtrl* m_textDitchPlayer;
-		
-		// Virtual event handlers, overide them in your derived class
-		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
-		virtual void OnMouseEvents( wxMouseEvent& event ){ event.Skip(); }
-		virtual void OnPaint( wxPaintEvent& event ){ event.Skip(); }
-		virtual void OnSize( wxSizeEvent& event ){ event.Skip(); }
-		virtual void OnCheckSitOut( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnButtonDealHand( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnButtonFold( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnButtonCall( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnButtonRaise( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnButtonLeaveTable( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnDitchPlayer( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnCheckPreFold( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnCheckPreCall( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnCheckPreCallAny( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnCheckPreRaise( wxCommandEvent& event ){ event.Skip(); }
-		virtual void OnCheckPreRaiseAny( wxCommandEvent& event ){ event.Skip(); }
-		
-	
-	public:
-		wxCheckBox* m_checkSitOut;
-		wxCheckBox* m_checkPreFold;
-		wxCheckBox* m_checkPreCall;
-		wxCheckBox* m_checkPreCallAny;
-		wxCheckBox* m_checkPreRaise;
-		wxCheckBox* m_checkPreRaiseAny;
-		wxStatusBar* m_statusBar;
-		CPokerDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = wxT("Poker"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 806,550 ), long style = wxDEFAULT_FRAME_STYLE|wxFRAME_NO_TASKBAR|wxFULL_REPAINT_ON_RESIZE|wxTAB_TRAVERSAL );
-		~CPokerDialogBase();
 	
 };
 

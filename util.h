@@ -13,7 +13,6 @@ typedef unsigned long long  uint64;
 #if defined(_MSC_VER) && _MSC_VER < 1300
 #define for  if (false) ; else for
 #endif
-
 #ifndef _MSC_VER
 #define __forceinline  inline
 #endif
@@ -25,25 +24,22 @@ typedef unsigned long long  uint64;
 #define UBEGIN(a)           ((unsigned char*)&(a))
 #define UEND(a)             ((unsigned char*)&((&(a))[1]))
 #define ARRAYLEN(array)     (sizeof(array)/sizeof((array)[0]))
-
-#ifdef _WINDOWS
 #define printf              OutputDebugStringF
-#endif
 
 #ifdef snprintf
 #undef snprintf
 #endif
 #define snprintf my_snprintf
 
-#ifndef PRId64
+#ifndef PRI64d
 #if defined(_MSC_VER) || defined(__BORLANDC__) || defined(__MSVCRT__)
-#define PRId64  "I64d"
-#define PRIu64  "I64u"
-#define PRIx64  "I64x"
+#define PRI64d  "I64d"
+#define PRI64u  "I64u"
+#define PRI64x  "I64x"
 #else
-#define PRId64  "lld"
-#define PRIu64  "llu"
-#define PRIx64  "llx"
+#define PRI64d  "lld"
+#define PRI64u  "llu"
+#define PRI64x  "llx"
 #endif
 #endif
 
@@ -58,6 +54,51 @@ inline T& REF(const T& val)
     return (T&)val;
 }
 
+#ifdef __WXMSW__
+#define MSG_NOSIGNAL        0
+#define MSG_DONTWAIT        0
+#ifndef UINT64_MAX
+#define UINT64_MAX          _UI64_MAX
+#define INT64_MAX           _I64_MAX
+#define INT64_MIN           _I64_MIN
+#endif
+#ifndef S_IRUSR
+#define S_IRUSR             0400
+#define S_IWUSR             0200
+#endif
+#else
+#define WSAGetLastError()   errno
+#define WSAEWOULDBLOCK      EWOULDBLOCK
+#define WSAEMSGSIZE         EMSGSIZE
+#define WSAEINTR            EINTR
+#define WSAEINPROGRESS      EINPROGRESS
+#define WSAEADDRINUSE       EADDRINUSE
+#define WSAENOTSOCK         EBADF
+#define INVALID_SOCKET      (SOCKET)(~0)
+#define SOCKET_ERROR        -1
+typedef u_int SOCKET;
+#define _vsnprintf(a,b,c,d) vsnprintf(a,b,c,d)
+#define strlwr(psz)         to_lower(psz)
+#define _strlwr(psz)        to_lower(psz)
+#define _mkdir(psz)         filesystem::create_directory(psz)
+#define MAX_PATH            1024
+#define Sleep(n)            wxMilliSleep(n)
+#define Beep(n1,n2)         (0)
+#endif
+
+inline int myclosesocket(SOCKET& hSocket)
+{
+    if (hSocket == INVALID_SOCKET)
+        return WSAENOTSOCK;
+#ifdef __WXMSW__
+    int ret = closesocket(hSocket);
+#else
+    int ret = close(hSocket);
+#endif
+    hSocket = INVALID_SOCKET;
+    return ret;
+}
+#define closesocket(s)      myclosesocket(s)
 
 
 
@@ -66,10 +107,15 @@ inline T& REF(const T& val)
 
 
 
+
+
+extern map<string, string> mapArgs;
+extern map<string, vector<string> > mapMultiArgs;
 extern bool fDebug;
 extern bool fPrintToDebugger;
 extern bool fPrintToConsole;
-extern map<string, string> mapArgs;
+extern char pszSetDataDir[MAX_PATH];
+extern bool fShutdown;
 
 void RandAddSeed();
 void RandAddSeedPerfmon();
@@ -83,8 +129,11 @@ string FormatMoney(int64 n, bool fPlus=false);
 bool ParseMoney(const char* pszIn, int64& nRet);
 vector<unsigned char> ParseHex(const char* psz);
 vector<unsigned char> ParseHex(const std::string& str);
-bool FileExists(const char* psz);
+void ParseParameters(int argc, char* argv[]);
 int GetFilesize(FILE* file);
+void GetDataDir(char* pszDirRet);
+string GetDataDir();
+void ShrinkDebugFile();
 uint64 GetRand(uint64 nMax);
 int64 GetTime();
 int64 GetAdjustedTime();
@@ -102,8 +151,7 @@ void AddTimeData(unsigned int ip, int64 nTime);
 
 
 
-// Wrapper to automatically initialize critical section
-// Could use wxCriticalSection for portability, but it doesn't support TryEnterCriticalSection
+// Wrapper to automatically initialize critical sections
 class CCriticalSection
 {
 #ifdef __WXMSW__
@@ -119,14 +167,14 @@ public:
 protected:
     wxMutex mutex;
 public:
-    explicit CCriticalSection() { }
+    explicit CCriticalSection() : mutex(wxMUTEX_RECURSIVE) { }
     ~CCriticalSection() { }
     void Enter() { mutex.Lock(); }
     void Leave() { mutex.Unlock(); }
     bool TryEnter() { return mutex.TryLock() == wxMUTEX_NO_ERROR; }
 #endif
 public:
-    char* pszFile;
+    const char* pszFile;
     int nLine;
 };
 
@@ -171,8 +219,6 @@ public:
 
 
 
-
-
 inline int OutputDebugStringF(const char* pszFormat, ...)
 {
     int ret = 0;
@@ -180,9 +226,14 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
     if (!fPrintToConsole)
     {
         // print to debug.log
-        FILE* fileout = fopen("debug.log", "a");
+        char pszFile[MAX_PATH+100];
+        GetDataDir(pszFile);
+        strlcat(pszFile, "/debug.log", sizeof(pszFile));
+        FILE* fileout = fopen(pszFile, "a");
         if (fileout)
         {
+            //// Debug print useful for profiling
+            //fprintf(fileout, " %"PRI64d" ", wxGetLocalTimeMillis().GetValue());
             va_list arg_ptr;
             va_start(arg_ptr, pszFormat);
             ret = vfprintf(fileout, pszFormat, arg_ptr);
@@ -191,6 +242,7 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
         }
     }
 
+#ifdef __WXMSW__
     if (fPrintToDebugger)
     {
         // accumulate a line at a time
@@ -231,6 +283,7 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
         }
     }
 #endif
+#endif
 
     if (fPrintToConsole)
     {
@@ -254,7 +307,7 @@ inline int OutputDebugStringF(const char* pszFormat, ...)
 
 inline string i64tostr(int64 n)
 {
-    return strprintf("%"PRId64, n);
+    return strprintf("%"PRI64d, n);
 }
 
 inline string itostr(int n)
@@ -328,6 +381,32 @@ inline void PrintHex(vector<unsigned char> vch, const char* pszFormat="%s", bool
     printf(pszFormat, HexStr(vch, fSpaces).c_str());
 }
 
+inline int64 PerformanceCounter()
+{
+    int64 nCounter = 0;
+#ifdef __WXMSW__
+    QueryPerformanceCounter((LARGE_INTEGER*)&nCounter);
+#else
+    timeval t;
+    gettimeofday(&t, NULL);
+    nCounter = t.tv_sec * 1000000 + t.tv_usec;
+#endif
+    return nCounter;
+}
+
+inline int64 GetTimeMillis()
+{
+    return wxGetLocalTimeMillis().GetValue();
+}
+
+inline string DateTimeStrFormat(const char* pszFormat, int64 nTime)
+{
+    time_t n = nTime;
+    struct tm* ptmTime = gmtime(&n);
+    char pszTime[200];
+    strftime(pszTime, sizeof(pszTime), pszFormat, ptmTime);
+    return pszTime;
+}
 
 
 
@@ -338,8 +417,10 @@ inline void PrintHex(vector<unsigned char> vch, const char* pszFormat="%s", bool
 
 inline void heapchk()
 {
+#ifdef __WXMSW__
     if (_heapchk() != _HEAPOK)
         DebugBreak();
+#endif
 }
 
 // Randomize the stack to help protect against buffer overrun exploits
@@ -347,7 +428,7 @@ inline void heapchk()
     {                                                               \
         static char nLoops;                                         \
         if (nLoops <= 0)                                            \
-            nLoops = GetRand(50) + 1;                               \
+            nLoops = GetRand(20) + 1;                               \
         if (nLoops-- > 1)                                           \
         {                                                           \
             ThreadFn;                                               \
@@ -361,6 +442,7 @@ inline void heapchk()
     } catch (...) {                      \
         PrintException(NULL, (pszFn));   \
     }
+
 
 
 
@@ -432,3 +514,83 @@ inline uint160 Hash160(const vector<unsigned char>& vch)
     RIPEMD160((unsigned char*)&hash1, sizeof(hash1), (unsigned char*)&hash2);
     return hash2;
 }
+
+
+
+
+
+
+
+
+
+
+
+// Note: It turns out we might have been able to use boost::thread
+// by using TerminateThread(boost::thread.native_handle(), 0);
+#ifdef __WXMSW__
+typedef HANDLE pthread_t;
+
+inline pthread_t CreateThread(void(*pfn)(void*), void* parg, bool fWantHandle=false)
+{
+    DWORD nUnused = 0;
+    HANDLE hthread =
+        CreateThread(
+            NULL,                        // default security
+            0,                           // inherit stack size from parent
+            (LPTHREAD_START_ROUTINE)pfn, // function pointer
+            parg,                        // argument
+            0,                           // creation option, start immediately
+            &nUnused);                   // thread identifier
+    if (hthread == NULL)
+    {
+        printf("Error: CreateThread() returned %d\n", GetLastError());
+        return (pthread_t)0;
+    }
+    if (!fWantHandle)
+    {
+        CloseHandle(hthread);
+        return (pthread_t)-1;
+    }
+    return hthread;
+}
+
+inline void SetThreadPriority(int nPriority)
+{
+    SetThreadPriority(GetCurrentThread(), nPriority);
+}
+#else
+inline pthread_t CreateThread(void(*pfn)(void*), void* parg, bool fWantHandle=false)
+{
+    pthread_t hthread = 0;
+    int ret = pthread_create(&hthread, NULL, (void*(*)(void*))pfn, parg);
+    if (ret != 0)
+    {
+        printf("Error: pthread_create() returned %d\n", ret);
+        return (pthread_t)0;
+    }
+    if (!fWantHandle)
+        return (pthread_t)-1;
+    return hthread;
+}
+
+#define THREAD_PRIORITY_LOWEST          PRIO_MIN
+#define THREAD_PRIORITY_BELOW_NORMAL    2
+#define THREAD_PRIORITY_NORMAL          0
+#define THREAD_PRIORITY_ABOVE_NORMAL    0
+
+inline void SetThreadPriority(int nPriority)
+{
+    // threads are processes on linux, so PRIO_PROCESS affects just the one thread
+    setpriority(PRIO_PROCESS, getpid(), nPriority);
+}
+
+inline bool TerminateThread(pthread_t hthread, unsigned int nExitCode)
+{
+    return (pthread_cancel(hthread) == 0);
+}
+
+inline void ExitThread(unsigned int nExitCode)
+{
+    pthread_exit((void*)nExitCode);
+}
+#endif

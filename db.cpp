@@ -4,7 +4,10 @@
 
 #include "headers.h"
 
+void ThreadFlushWalletDB(void* parg);
 
+
+unsigned int nWalletDBUpdated;
 
 
 
@@ -17,6 +20,7 @@ static CCriticalSection cs_db;
 static bool fDbEnvInit = false;
 DbEnv dbenv(0);
 static map<string, int> mapFileUseCount;
+static map<string, Db*> mapDb;
 
 class CDBInit
 {
@@ -36,38 +40,37 @@ public:
 instance_of_cdbinit;
 
 
-CDB::CDB(const char* pszFile, const char* pszMode, bool fTxn) : pdb(NULL)
+CDB::CDB(const char* pszFile, const char* pszMode) : pdb(NULL)
 {
     int ret;
     if (pszFile == NULL)
         return;
 
+    fReadOnly = (!strchr(pszMode, '+') && !strchr(pszMode, 'w'));
     bool fCreate = strchr(pszMode, 'c');
-    bool fReadOnly = (!strchr(pszMode, '+') && !strchr(pszMode, 'w'));
     unsigned int nFlags = DB_THREAD;
     if (fCreate)
         nFlags |= DB_CREATE;
-    else if (fReadOnly)
-        nFlags |= DB_RDONLY;
-    if (!fReadOnly || fTxn)
-        nFlags |= DB_AUTO_COMMIT;
 
     CRITICAL_BLOCK(cs_db)
     {
         if (!fDbEnvInit)
         {
-            string strAppDir = GetAppDir();
-            string strLogDir = strAppDir + "\\database";
+            if (fShutdown)
+                return;
+            string strDataDir = GetDataDir();
+            string strLogDir = strDataDir + "/database";
             _mkdir(strLogDir.c_str());
-            printf("dbenv.open strAppDir=%s\n", strAppDir.c_str());
+            string strErrorFile = strDataDir + "/db.log";
+            printf("dbenv.open strLogDir=%s strErrorFile=%s\n", strLogDir.c_str(), strErrorFile.c_str());
 
             dbenv.set_lg_dir(strLogDir.c_str());
             dbenv.set_lg_max(10000000);
             dbenv.set_lk_max_locks(10000);
             dbenv.set_lk_max_objects(10000);
-            dbenv.set_errfile(fopen("db.log", "a")); /// debug
-            ///dbenv.log_set_config(DB_LOG_AUTO_REMOVE, 1); /// causes corruption
-            ret = dbenv.open(strAppDir.c_str(),
+            dbenv.set_errfile(fopen(strErrorFile.c_str(), "a")); /// debug
+            dbenv.set_flags(DB_AUTO_COMMIT, 1);
+            ret = dbenv.open(strDataDir.c_str(),
                              DB_CREATE     |
                              DB_INIT_LOCK  |
                              DB_INIT_LOG   |
@@ -76,7 +79,7 @@ CDB::CDB(const char* pszFile, const char* pszMode, bool fTxn) : pdb(NULL)
                              DB_THREAD     |
                              DB_PRIVATE    |
                              DB_RECOVER,
-                             0);
+                             S_IRUSR | S_IWUSR);
             if (ret > 0)
                 throw runtime_error(strprintf("CDB() : error %d opening database environment\n", ret));
             fDbEnvInit = true;
@@ -84,31 +87,39 @@ CDB::CDB(const char* pszFile, const char* pszMode, bool fTxn) : pdb(NULL)
 
         strFile = pszFile;
         ++mapFileUseCount[strFile];
+        pdb = mapDb[strFile];
+        if (pdb == NULL)
+        {
+            pdb = new Db(&dbenv, 0);
+
+            ret = pdb->open(NULL,      // Txn pointer
+                            pszFile,   // Filename
+                            "main",    // Logical db name
+                            DB_BTREE,  // Database type
+                            nFlags,    // Flags
+                            0);
+
+            if (ret > 0)
+            {
+                delete pdb;
+                pdb = NULL;
+                CRITICAL_BLOCK(cs_db)
+                    --mapFileUseCount[strFile];
+                strFile = "";
+                throw runtime_error(strprintf("CDB() : can't open database file %s, error %d\n", pszFile, ret));
+            }
+
+            if (fCreate && !Exists(string("version")))
+            {
+                bool fTmp = fReadOnly;
+                fReadOnly = false;
+                WriteVersion(VERSION);
+                fReadOnly = fTmp;
+            }
+
+            mapDb[strFile] = pdb;
+        }
     }
-
-    pdb = new Db(&dbenv, 0);
-
-    ret = pdb->open(NULL,      // Txn pointer
-                    pszFile,   // Filename
-                    "main",    // Logical db name
-                    DB_BTREE,  // Database type
-                    nFlags,    // Flags
-                    0);
-
-    if (ret > 0)
-    {
-        delete pdb;
-        pdb = NULL;
-        CRITICAL_BLOCK(cs_db)
-            --mapFileUseCount[strFile];
-        strFile = "";
-        throw runtime_error(strprintf("CDB() : can't open database file %s, error %d\n", pszFile, ret));
-    }
-
-    if (fCreate && !Exists(string("version")))
-        WriteVersion(VERSION);
-
-    RandAddSeed();
 }
 
 void CDB::Close()
@@ -118,34 +129,51 @@ void CDB::Close()
     if (!vTxn.empty())
         vTxn.front()->abort();
     vTxn.clear();
-    pdb->close(0);
-    delete pdb;
     pdb = NULL;
+    dbenv.txn_checkpoint(0, 0, 0);
 
     CRITICAL_BLOCK(cs_db)
-    {
-        dbenv.txn_checkpoint(0, 0, 0);
         --mapFileUseCount[strFile];
-    }
 
     RandAddSeed();
+}
+
+void CloseDb(const string& strFile)
+{
+    CRITICAL_BLOCK(cs_db)
+    {
+        if (mapDb[strFile] != NULL)
+        {
+            // Close the database handle
+            Db* pdb = mapDb[strFile];
+            pdb->close(0);
+            delete pdb;
+            mapDb[strFile] = NULL;
+        }
+    }
 }
 
 void DBFlush(bool fShutdown)
 {
     // Flush log data to the actual data file
     //  on all files that are not in use
-    printf("DBFlush(%s)\n", fShutdown ? "true" : "false");
+    printf("DBFlush(%s)%s\n", fShutdown ? "true" : "false", fDbEnvInit ? "" : " db not started");
+    if (!fDbEnvInit)
+        return;
     CRITICAL_BLOCK(cs_db)
     {
-        dbenv.txn_checkpoint(0, 0, 0);
         map<string, int>::iterator mi = mapFileUseCount.begin();
         while (mi != mapFileUseCount.end())
         {
             string strFile = (*mi).first;
             int nRefCount = (*mi).second;
+            printf("%s refcount=%d\n", strFile.c_str(), nRefCount);
             if (nRefCount == 0)
             {
+                // Move log data to the dat file
+                CloseDb(strFile);
+                dbenv.txn_checkpoint(0, 0, 0);
+                printf("%s flush\n", strFile.c_str());
                 dbenv.lsn_reset(strFile.c_str(), 0);
                 mapFileUseCount.erase(mi++);
             }
@@ -232,7 +260,10 @@ bool CTxDB::ReadOwnerTxes(uint160 hash160, int nMinHeight, vector<CTransaction>&
         if (ret == DB_NOTFOUND)
             break;
         else if (ret != 0)
+        {
+            pcursor->close();
             return false;
+        }
 
         // Unserialize
         string strType;
@@ -249,9 +280,14 @@ bool CTxDB::ReadOwnerTxes(uint160 hash160, int nMinHeight, vector<CTransaction>&
         {
             vtx.resize(vtx.size()+1);
             if (!vtx.back().ReadFromDisk(pos))
+            {
+                pcursor->close();
                 return false;
+            }
         }
     }
+
+    pcursor->close();
     return true;
 }
 
@@ -373,6 +409,7 @@ bool CTxDB::LoadBlockIndex()
             break;
         }
     }
+    pcursor->close();
 
     if (!ReadHashBestChain(hashBestChain))
     {
@@ -385,7 +422,7 @@ bool CTxDB::LoadBlockIndex()
         return error("CTxDB::LoadBlockIndex() : blockindex for hashBestChain not found");
     pindexBest = mapBlockIndex[hashBestChain];
     nBestHeight = pindexBest->nHeight;
-    printf("LoadBlockIndex(): hashBestChain=%s  height=%d\n", hashBestChain.ToString().substr(0,14).c_str(), nBestHeight);
+    printf("LoadBlockIndex(): hashBestChain=%s  height=%d\n", hashBestChain.ToString().substr(0,16).c_str(), nBestHeight);
 
     return true;
 }
@@ -405,11 +442,10 @@ bool CAddrDB::WriteAddress(const CAddress& addr)
 
 bool CAddrDB::LoadAddresses()
 {
-    CRITICAL_BLOCK(cs_mapIRCAddresses)
     CRITICAL_BLOCK(cs_mapAddresses)
     {
         // Load user provided addresses
-        CAutoFile filein = fopen("addr.txt", "rt");
+        CAutoFile filein = fopen((GetDataDir() + "/addr.txt").c_str(), "rt");
         if (filein)
         {
             try
@@ -418,11 +454,9 @@ bool CAddrDB::LoadAddresses()
                 while (fgets(psz, sizeof(psz), filein))
                 {
                     CAddress addr(psz, NODE_NETWORK);
-                    if (addr.ip != 0)
-                    {
+                    addr.nTime = 0; // so it won't relay unless successfully connected
+                    if (addr.IsValid())
                         AddAddress(*this, addr);
-                        mapIRCAddresses.insert(make_pair(addr.GetKey(), addr));
-                    }
                 }
             }
             catch (...) { }
@@ -454,6 +488,7 @@ bool CAddrDB::LoadAddresses()
                 mapAddresses.insert(make_pair(addr.GetKey(), addr));
             }
         }
+        pcursor->close();
 
         printf("Loaded %d addresses\n", mapAddresses.size());
 
@@ -499,28 +534,17 @@ bool CReviewDB::WriteReviews(uint256 hash, const vector<CReview>& vReviews)
 // CWalletDB
 //
 
-CWalletDB::~CWalletDB()
-{
-    // Flush whenever all handles to wallet.dat are closed
-    CRITICAL_BLOCK(cs_db)
-    {
-        Close(); // close includes a txn_checkpoint
-        map<string, int>::iterator mi = mapFileUseCount.find(strFile);
-        if (mi != mapFileUseCount.end())
-        {
-            int nRefCount = (*mi).second;
-            if (nRefCount == 0)
-            {
-                dbenv.lsn_reset(strFile.c_str(), 0);
-                mapFileUseCount.erase(mi++);
-            }
-        }
-    }
-}
-
 bool CWalletDB::LoadWallet(vector<unsigned char>& vchDefaultKeyRet)
 {
     vchDefaultKeyRet.clear();
+    int nFileVersion = 0;
+
+    // Modify defaults
+#ifndef __WXMSW__
+    // Tray icon sometimes disappears on 9.10 karmic koala 64-bit, leaving no way to access the program
+    fMinimizeToTray = false;
+    fMinimizeOnClose = false;
+#endif
 
     //// todo: shouldn't we catch exceptions and try to recover and continue?
     CRITICAL_BLOCK(cs_mapKeys)
@@ -567,8 +591,8 @@ bool CWalletDB::LoadWallet(vector<unsigned char>& vchDefaultKeyRet)
                 //printf("LoadWallet  %s\n", wtx.GetHash().ToString().c_str());
                 //printf(" %12I64d  %s  %s  %s\n",
                 //    wtx.vout[0].nValue,
-                //    DateTimeStr(wtx.nTime).c_str(),
-                //    wtx.hashBlock.ToString().substr(0,14).c_str(),
+                //    DateTimeStrFormat("%x %H:%M:%S", wtx.nTime).c_str(),
+                //    wtx.hashBlock.ToString().substr(0,16).c_str(),
                 //    wtx.mapValue["message"].c_str());
             }
             else if (strType == "key")
@@ -584,6 +608,10 @@ bool CWalletDB::LoadWallet(vector<unsigned char>& vchDefaultKeyRet)
             else if (strType == "defaultkey")
             {
                 ssValue >> vchDefaultKeyRet;
+            }
+            else if (strType == "version")
+            {
+                ssValue >> nFileVersion;
             }
             else if (strType == "setting")
             {
@@ -606,11 +634,13 @@ bool CWalletDB::LoadWallet(vector<unsigned char>& vchDefaultKeyRet)
 
             }
         }
+        pcursor->close();
     }
 
+    printf("nFileVersion = %d\n", nFileVersion);
     printf("fShowGenerated = %d\n", fShowGenerated);
     printf("fGenerateBitcoins = %d\n", fGenerateBitcoins);
-    printf("nTransactionFee = %I64d\n", nTransactionFee);
+    printf("nTransactionFee = %"PRI64d"\n", nTransactionFee);
     printf("addrIncoming = %s\n", addrIncoming.ToString().c_str());
     printf("fMinimizeToTray = %d\n", fMinimizeToTray);
     printf("fMinimizeOnClose = %d\n", fMinimizeOnClose);
@@ -626,6 +656,16 @@ bool CWalletDB::LoadWallet(vector<unsigned char>& vchDefaultKeyRet)
         WriteSetting("nTransactionFee", nTransactionFee);
     }
 
+    // Upgrade
+    if (nFileVersion < VERSION)
+    {
+        // Get rid of old debug.log file in current directory
+        if (nFileVersion <= 105 && !pszSetDataDir[0])
+            unlink("debug.log");
+
+        WriteVersion(VERSION);
+    }
+
     return true;
 }
 
@@ -633,7 +673,7 @@ bool LoadWallet(bool& fFirstRunRet)
 {
     fFirstRunRet = false;
     vector<unsigned char> vchDefaultKey;
-    if (!CWalletDB("cr").LoadWallet(vchDefaultKey))
+    if (!CWalletDB("cr+").LoadWallet(vchDefaultKey))
         return false;
     fFirstRunRet = vchDefaultKey.empty();
 
@@ -655,5 +695,66 @@ bool LoadWallet(bool& fFirstRunRet)
         CWalletDB().WriteDefaultKey(keyUser.GetPubKey());
     }
 
+    CreateThread(ThreadFlushWalletDB, NULL);
     return true;
+}
+
+void ThreadFlushWalletDB(void* parg)
+{
+    static bool fOneThread;
+    if (fOneThread)
+        return;
+    fOneThread = true;
+    if (mapArgs.count("-noflushwallet"))
+        return;
+
+    unsigned int nLastSeen = nWalletDBUpdated;
+    unsigned int nLastFlushed = nWalletDBUpdated;
+    int64 nLastWalletUpdate = GetTime();
+    while (!fShutdown)
+    {
+        Sleep(500);
+
+        if (nLastSeen != nWalletDBUpdated)
+        {
+            nLastSeen = nWalletDBUpdated;
+            nLastWalletUpdate = GetTime();
+        }
+
+        if (nLastFlushed != nWalletDBUpdated && GetTime() - nLastWalletUpdate >= 2)
+        {
+            TRY_CRITICAL_BLOCK(cs_db)
+            {
+                // Don't do this if any databases are in use
+                int nRefCount = 0;
+                map<string, int>::iterator mi = mapFileUseCount.begin();
+                while (mi != mapFileUseCount.end())
+                {
+                    nRefCount += (*mi).second;
+                    mi++;
+                }
+
+                if (nRefCount == 0 && !fShutdown)
+                {
+                    string strFile = "wallet.dat";
+                    map<string, int>::iterator mi = mapFileUseCount.find(strFile);
+                    if (mi != mapFileUseCount.end())
+                    {
+                        printf("%s ", DateTimeStrFormat("%x %H:%M:%S", GetTime()).c_str());
+                        printf("Flushing wallet.dat\n");
+                        nLastFlushed = nWalletDBUpdated;
+                        int64 nStart = GetTimeMillis();
+
+                        // Flush wallet.dat so it's self contained
+                        CloseDb(strFile);
+                        dbenv.txn_checkpoint(0, 0, 0);
+                        dbenv.lsn_reset(strFile.c_str(), 0);
+
+                        mapFileUseCount.erase(mi++);
+                        printf("Flushed wallet.dat %"PRI64d"ms\n", GetTimeMillis() - nStart);
+                    }
+                }
+            }
+        }
+    }
 }
