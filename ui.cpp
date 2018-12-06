@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -7,23 +7,15 @@
 #include <crtdbg.h>
 #endif
 
-void ThreadRequestProductDetails(void* parg);
-void ThreadRandSendTest(void* parg);
 bool GetStartOnSystemStartup();
 void SetStartOnSystemStartup(bool fAutoStart);
 
 
 
 DEFINE_EVENT_TYPE(wxEVT_UITHREADCALL)
-DEFINE_EVENT_TYPE(wxEVT_REPLY1)
-DEFINE_EVENT_TYPE(wxEVT_REPLY2)
-DEFINE_EVENT_TYPE(wxEVT_REPLY3)
 
 CMainFrame* pframeMain = NULL;
 CMyTaskBarIcon* ptaskbaricon = NULL;
-map<string, string> mapAddressBook;
-bool fRandSendTest = false;
-void RandSend();
 extern int g_isPainting;
 bool fClosedToTray = false;
 
@@ -134,7 +126,6 @@ int GetSelection(wxListCtrl* listCtrl)
     return -1;
 }
 
-
 string HtmlEscape(const char* psz, bool fMultiLine=false)
 {
     int len = 0;
@@ -170,18 +161,6 @@ string HtmlEscape(const string& str, bool fMultiLine=false)
     return HtmlEscape(str.c_str(), fMultiLine);
 }
 
-void AddToMyProducts(CProduct product)
-{
-    CProduct& productInsert = mapMyProducts[product.GetHash()];
-    productInsert = product;
-    InsertLine(pframeMain->m_listCtrlProductsSent, &productInsert,
-                product.mapValue["category"],
-                product.mapValue["title"].substr(0, 100),
-                product.mapValue["description"].substr(0, 100),
-                product.mapValue["price"],
-                "");
-}
-
 void CalledMessageBox(const string& message, const string& caption, int style, wxWindow* parent, int x, int y, int* pnRet, bool* pfDone)
 {
     *pnRet = wxMessageBox(message, caption, style, parent, x, y);
@@ -190,6 +169,12 @@ void CalledMessageBox(const string& message, const string& caption, int style, w
 
 int ThreadSafeMessageBox(const string& message, const string& caption, int style, wxWindow* parent, int x, int y)
 {
+    if (fDaemon)
+    {
+        printf("wxMessageBox %s: %s\n", caption.c_str(), message.c_str());
+        return wxOK;
+    }
+
 #ifdef __WXMSW__
     return wxMessageBox(message, caption, style, parent, x, y);
 #else
@@ -211,90 +196,6 @@ int ThreadSafeMessageBox(const string& message, const string& caption, int style
 
 
 
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// Custom events
-//
-// If this code gets used again, it should be replaced with something like UIThreadCall
-
-set<void*> setCallbackAvailable;
-CCriticalSection cs_setCallbackAvailable;
-
-void AddCallbackAvailable(void* p)
-{
-    CRITICAL_BLOCK(cs_setCallbackAvailable)
-        setCallbackAvailable.insert(p);
-}
-
-void RemoveCallbackAvailable(void* p)
-{
-    CRITICAL_BLOCK(cs_setCallbackAvailable)
-        setCallbackAvailable.erase(p);
-}
-
-bool IsCallbackAvailable(void* p)
-{
-    CRITICAL_BLOCK(cs_setCallbackAvailable)
-        return setCallbackAvailable.count(p);
-    return false;
-}
-
-template<typename T>
-void AddPendingCustomEvent(wxEvtHandler* pevthandler, int nEventID, const T pbeginIn, const T pendIn)
-{
-    if (!pevthandler)
-        return;
-
-    const char* pbegin = (pendIn != pbeginIn) ? &pbeginIn[0] : NULL;
-    const char* pend = pbegin + (pendIn - pbeginIn) * sizeof(pbeginIn[0]);
-    wxCommandEvent event(nEventID);
-    wxString strData(wxChar(0), (pend - pbegin) / sizeof(wxChar) + 1);
-    memcpy(&strData[0], pbegin, pend - pbegin);
-    event.SetString(strData);
-    event.SetInt(pend - pbegin);
-
-    pevthandler->AddPendingEvent(event);
-}
-
-template<class T>
-void AddPendingCustomEvent(wxEvtHandler* pevthandler, int nEventID, const T& obj)
-{
-    CDataStream ss;
-    ss << obj;
-    AddPendingCustomEvent(pevthandler, nEventID, ss.begin(), ss.end());
-}
-
-void AddPendingReplyEvent1(void* pevthandler, CDataStream& vRecv)
-{
-    if (IsCallbackAvailable(pevthandler))
-        AddPendingCustomEvent((wxEvtHandler*)pevthandler, wxEVT_REPLY1, vRecv.begin(), vRecv.end());
-}
-
-void AddPendingReplyEvent2(void* pevthandler, CDataStream& vRecv)
-{
-    if (IsCallbackAvailable(pevthandler))
-        AddPendingCustomEvent((wxEvtHandler*)pevthandler, wxEVT_REPLY2, vRecv.begin(), vRecv.end());
-}
-
-void AddPendingReplyEvent3(void* pevthandler, CDataStream& vRecv)
-{
-    if (IsCallbackAvailable(pevthandler))
-        AddPendingCustomEvent((wxEvtHandler*)pevthandler, wxEVT_REPLY3, vRecv.begin(), vRecv.end());
-}
-
-CDataStream GetStreamFromEvent(const wxCommandEvent& event)
-{
-    wxString strData = event.GetString();
-    const char* pszBegin = strData.c_str();
-    return CDataStream(pszBegin, pszBegin + event.GetInt(), SER_NETWORK);
-}
 
 
 
@@ -328,13 +229,12 @@ CMainFrame::CMainFrame(wxWindow* parent) : CMainFrameBase(parent)
     m_staticTextBalance->SetSize(140, 17);
     // & underlines don't work on the toolbar buttons on gtk
     m_toolBar->ClearTools();
-    m_toolBar->AddTool(wxID_BUTTONSEND, "Send Coins", wxBitmap(send20_xpm), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString);
-    m_toolBar->AddTool(wxID_BUTTONRECEIVE, "Address Book", wxBitmap(addressbook20_xpm), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString);
+    m_toolBar->AddTool(wxID_BUTTONSEND, _("Send Coins"), wxBitmap(send20_xpm), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString);
+    m_toolBar->AddTool(wxID_BUTTONRECEIVE, _("Address Book"), wxBitmap(addressbook20_xpm), wxNullBitmap, wxITEM_NORMAL, wxEmptyString, wxEmptyString);
     m_toolBar->Realize();
     // resize to fit ubuntu's huge default font
-    dResize = 1.19;
-    SetSize(dResize * GetSize().GetWidth(), 1.1 * GetSize().GetHeight());
     dResize = 1.20;
+    SetSize((dResize + 0.02) * GetSize().GetWidth(), 1.09 * GetSize().GetHeight());
 #endif
     m_staticTextBalance->SetLabel(FormatMoney(GetBalance()) + "  ");
     m_listCtrl->SetFocus();
@@ -344,31 +244,13 @@ CMainFrame::CMainFrame(wxWindow* parent) : CMainFrameBase(parent)
     int nDateWidth = DateTimeStr(1229413914).size() * 6 + 8;
     if (!strstr(DateTimeStr(1229413914).c_str(), "2008"))
         nDateWidth += 12;
-    m_listCtrl->InsertColumn(0, "",             wxLIST_FORMAT_LEFT,  dResize * 0);
-    m_listCtrl->InsertColumn(1, "",             wxLIST_FORMAT_LEFT,  dResize * 0);
-    m_listCtrl->InsertColumn(2, "Status",       wxLIST_FORMAT_LEFT,  dResize * 90);
-    m_listCtrl->InsertColumn(3, "Date",         wxLIST_FORMAT_LEFT,  dResize * nDateWidth);
-    m_listCtrl->InsertColumn(4, "Description",  wxLIST_FORMAT_LEFT,  dResize * 409 - nDateWidth);
-    m_listCtrl->InsertColumn(5, "Debit",        wxLIST_FORMAT_RIGHT, dResize * 79);
-    m_listCtrl->InsertColumn(6, "Credit",       wxLIST_FORMAT_RIGHT, dResize * 79);
-
-    //m_listCtrlProductsSent->InsertColumn(0, "Category",      wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlProductsSent->InsertColumn(1, "Title",         wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlProductsSent->InsertColumn(2, "Description",   wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlProductsSent->InsertColumn(3, "Price",         wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlProductsSent->InsertColumn(4, "",              wxLIST_FORMAT_LEFT,  100);
-
-    //m_listCtrlOrdersSent->InsertColumn(0, "Time",          wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersSent->InsertColumn(1, "Price",         wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersSent->InsertColumn(2, "",              wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersSent->InsertColumn(3, "",              wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersSent->InsertColumn(4, "",              wxLIST_FORMAT_LEFT,  100);
-
-    //m_listCtrlOrdersReceived->InsertColumn(0, "Time",            wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersReceived->InsertColumn(1, "Price",           wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersReceived->InsertColumn(2, "Payment Status",  wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersReceived->InsertColumn(3, "",                wxLIST_FORMAT_LEFT,  100);
-    //m_listCtrlOrdersReceived->InsertColumn(4, "",                wxLIST_FORMAT_LEFT,  100);
+    m_listCtrl->InsertColumn(0, "",               wxLIST_FORMAT_LEFT,  dResize * 0);
+    m_listCtrl->InsertColumn(1, "",               wxLIST_FORMAT_LEFT,  dResize * 0);
+    m_listCtrl->InsertColumn(2, _("Status"),      wxLIST_FORMAT_LEFT,  dResize * 110);
+    m_listCtrl->InsertColumn(3, _("Date"),        wxLIST_FORMAT_LEFT,  dResize * nDateWidth);
+    m_listCtrl->InsertColumn(4, _("Description"), wxLIST_FORMAT_LEFT,  dResize * 409 - nDateWidth);
+    m_listCtrl->InsertColumn(5, _("Debit"),       wxLIST_FORMAT_RIGHT, dResize * 79);
+    m_listCtrl->InsertColumn(6, _("Credit"),      wxLIST_FORMAT_RIGHT, dResize * 79);
 
     // Init status bar
     int pnWidths[3] = { -100, 88, 290 };
@@ -421,7 +303,7 @@ void Shutdown(void* parg)
         StopNode();
         DBFlush(true);
         CreateThread(ExitTimeout, NULL);
-        Sleep(10);
+        Sleep(50);
         printf("Bitcoin exiting\n\n");
         fExit = true;
         exit(0);
@@ -455,6 +337,8 @@ void CMainFrame::OnIconize(wxIconizeEvent& event)
 {
     // Hide the task bar button when minimized.
     // Event is sent when the frame is minimized or restored.
+    // wxWidgets 2.8.9 doesn't have IsIconized() so there's no way
+    // to get rid of the deprecated warning.  Just ignore it.
     if (!event.Iconized())
         fClosedToTray = false;
 #ifndef __WXMSW__
@@ -507,33 +391,34 @@ int CMainFrame::GetSortIndex(const string& strSort)
 
 void CMainFrame::InsertLine(bool fNew, int nIndex, uint256 hashKey, string strSort, const wxString& str2, const wxString& str3, const wxString& str4, const wxString& str5, const wxString& str6)
 {
-    string str0 = strSort;
-    long nData = *(long*)&hashKey;
+    strSort = " " + strSort;       // leading space to workaround wx2.9.0 ubuntu 9.10 bug
+    long nData = *(long*)&hashKey; //  where first char of hidden column is displayed
 
     // Find item
     if (!fNew && nIndex == -1)
     {
+        string strHash = " " + hashKey.ToString();
         while ((nIndex = m_listCtrl->FindItem(nIndex, nData)) != -1)
-            if (GetItemText(m_listCtrl, nIndex, 1) == hashKey.ToString())
+            if (GetItemText(m_listCtrl, nIndex, 1) == strHash)
                 break;
     }
 
     // fNew is for blind insert, only use if you're sure it's new
     if (fNew || nIndex == -1)
     {
-        nIndex = m_listCtrl->InsertItem(GetSortIndex(strSort), str0);
+        nIndex = m_listCtrl->InsertItem(GetSortIndex(strSort), strSort);
     }
     else
     {
         // If sort key changed, must delete and reinsert to make it relocate
-        if (GetItemText(m_listCtrl, nIndex, 0) != str0)
+        if (GetItemText(m_listCtrl, nIndex, 0) != strSort)
         {
             m_listCtrl->DeleteItem(nIndex);
-            nIndex = m_listCtrl->InsertItem(GetSortIndex(strSort), str0);
+            nIndex = m_listCtrl->InsertItem(GetSortIndex(strSort), strSort);
         }
     }
 
-    m_listCtrl->SetItem(nIndex, 1, hashKey.ToString());
+    m_listCtrl->SetItem(nIndex, 1, " " + hashKey.ToString());
     m_listCtrl->SetItem(nIndex, 2, str2);
     m_listCtrl->SetItem(nIndex, 3, str3);
     m_listCtrl->SetItem(nIndex, 4, str4);
@@ -548,8 +433,9 @@ bool CMainFrame::DeleteLine(uint256 hashKey)
 
     // Find item
     int nIndex = -1;
+    string strHash = " " + hashKey.ToString();
     while ((nIndex = m_listCtrl->FindItem(nIndex, nData)) != -1)
-        if (GetItemText(m_listCtrl, nIndex, 1) == hashKey.ToString())
+        if (GetItemText(m_listCtrl, nIndex, 1) == strHash)
             break;
 
     if (nIndex != -1)
@@ -564,19 +450,19 @@ string FormatTxStatus(const CWalletTx& wtx)
     if (!wtx.IsFinal())
     {
         if (wtx.nLockTime < 500000000)
-            return strprintf("Open for %d blocks", nBestHeight - wtx.nLockTime);
+            return strprintf(_("Open for %d blocks"), nBestHeight - wtx.nLockTime);
         else
-            return strprintf("Open until %s", DateTimeStr(wtx.nLockTime).c_str());
+            return strprintf(_("Open until %s"), DateTimeStr(wtx.nLockTime).c_str());
     }
     else
     {
         int nDepth = wtx.GetDepthInMainChain();
         if (GetAdjustedTime() - wtx.nTimeReceived > 2 * 60 && wtx.GetRequestCount() == 0)
-            return strprintf("%d/offline?", nDepth);
+            return strprintf(_("%d/offline?"), nDepth);
         else if (nDepth < 6)
-            return strprintf("%d/unconfirmed", nDepth);
+            return strprintf(_("%d/unconfirmed"), nDepth);
         else
-            return strprintf("%d blocks", nDepth);
+            return strprintf(_("%d confirmations"), nDepth);
     }
 }
 
@@ -661,7 +547,7 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
         if (wtx.IsCoinBase())
         {
             // Coinbase
-            strDescription = "Generated";
+            strDescription = _("Generated");
             if (nCredit == 0)
             {
                 int64 nUnmatured = 0;
@@ -669,15 +555,15 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
                     nUnmatured += txout.GetCredit();
                 if (wtx.IsInMainChain())
                 {
-                    strDescription = strprintf("Generated (%s matures in %d more blocks)", FormatMoney(nUnmatured).c_str(), wtx.GetBlocksToMaturity());
+                    strDescription = strprintf(_("Generated (%s matures in %d more blocks)"), FormatMoney(nUnmatured).c_str(), wtx.GetBlocksToMaturity());
 
                     // Check if the block was requested by anyone
                     if (GetAdjustedTime() - wtx.nTimeReceived > 2 * 60 && wtx.GetRequestCount() == 0)
-                        strDescription = "Generated - Warning: This block was not received by any other nodes and will probably not be accepted!";
+                        strDescription = _("Generated - Warning: This block was not received by any other nodes and will probably not be accepted!");
                 }
                 else
                 {
-                    strDescription = "Generated (not accepted)";
+                    strDescription = _("Generated (not accepted)");
                 }
             }
         }
@@ -685,7 +571,7 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
         {
             // Online transaction
             if (!mapValue["from"].empty())
-                strDescription += "From: " + mapValue["from"];
+                strDescription += _("From: ") + mapValue["from"];
             if (!mapValue["message"].empty())
             {
                 if (!strDescription.empty())
@@ -703,19 +589,22 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
                     vector<unsigned char> vchPubKey;
                     if (ExtractPubKey(txout.scriptPubKey, true, vchPubKey))
                     {
-                        string strAddress = PubKeyToAddress(vchPubKey);
-                        if (mapAddressBook.count(strAddress))
+                        CRITICAL_BLOCK(cs_mapAddressBook)
                         {
-                            //strDescription += "Received payment to ";
-                            //strDescription += "Received with address ";
-                            strDescription += "From: unknown, To: ";
-                            strDescription += strAddress;
-                            /// The labeling feature is just too confusing, so I hid it
-                            /// by putting it at the end where it runs off the screen.
-                            /// It can still be seen by widening the column, or in the
-                            /// details dialog.
-                            if (!mapAddressBook[strAddress].empty())
-                                strDescription += " (" + mapAddressBook[strAddress] + ")";
+                            string strAddress = PubKeyToAddress(vchPubKey);
+                            if (mapAddressBook.count(strAddress))
+                            {
+                                //strDescription += _("Received payment to ");
+                                //strDescription += _("Received with address ");
+                                strDescription += _("From: unknown, To: ");
+                                strDescription += strAddress;
+                                /// The labeling feature is just too confusing, so I hid it
+                                /// by putting it at the end where it runs off the screen.
+                                /// It can still be seen by widening the column, or in the
+                                /// details dialog.
+                                if (!mapAddressBook[strAddress].empty())
+                                    strDescription += " (" + mapAddressBook[strAddress] + ")";
+                            }
                         }
                     }
                     break;
@@ -747,7 +636,7 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
             InsertLine(fNew, nIndex, hash, strSort,
                        strStatus,
                        nTime ? DateTimeStr(nTime) : "",
-                       "Payment to yourself",
+                       _("Payment to yourself"),
                        "",
                        "");
             /// issue: can't tell which is the payment and which is the change anymore
@@ -781,9 +670,10 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
                         strAddress = Hash160ToAddress(hash160);
                 }
 
-                string strDescription = "To: ";
-                if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
-                    strDescription += mapAddressBook[strAddress] + " ";
+                string strDescription = _("To: ");
+                CRITICAL_BLOCK(cs_mapAddressBook)
+                    if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
+                        strDescription += mapAddressBook[strAddress] + " ";
                 strDescription += strAddress;
                 if (!mapValue["message"].empty())
                 {
@@ -982,7 +872,7 @@ void ThreadDelayedRepaint(void* parg)
                 printf("DelayedRepaint\n");
                 wxPaintEvent event;
                 pframeMain->fRefresh = true;
-                pframeMain->AddPendingEvent(event);
+                pframeMain->GetEventHandler()->AddPendingEvent(event);
             }
         }
         Sleep(nRepaintInterval);
@@ -1007,7 +897,7 @@ void MainFrameRepaint()
         printf("MainFrameRepaint\n");
         wxPaintEvent event;
         pframeMain->fRefresh = true;
-        pframeMain->AddPendingEvent(event);
+        pframeMain->GetEventHandler()->AddPendingEvent(event);
     }
 }
 
@@ -1070,12 +960,12 @@ void CMainFrame::OnPaintListCtrl(wxPaintEvent& event)
     // Update status bar
     string strGen = "";
     if (fGenerateBitcoins)
-        strGen = "    Generating";
+        strGen = _("    Generating");
     if (fGenerateBitcoins && vNodes.empty())
-        strGen = "(not connected)";
+        strGen = _("(not connected)");
     m_statusBar->SetStatusText(strGen, 1);
 
-    string strStatus = strprintf("     %d connections     %d blocks     %d transactions", vNodes.size(), nBestHeight + 1, nTransactionCount);
+    string strStatus = strprintf(_("     %d connections     %d blocks     %d transactions"), vNodes.size(), nBestHeight + 1, nTransactionCount);
     m_statusBar->SetStatusText(strStatus, 2);
 
     if (fDebug && GetTime() - nThreadSocketHandlerHeartbeat > 60)
@@ -1196,16 +1086,6 @@ void CMainFrame::OnMouseEventsAddress(wxMouseEvent& event)
     event.Skip();
 }
 
-void CMainFrame::OnButtonCopy(wxCommandEvent& event)
-{
-    // Copy address box to clipboard
-    if (wxTheClipboard->Open())
-    {
-        wxTheClipboard->SetData(new wxTextDataObject(m_textCtrlAddress->GetValue()));
-        wxTheClipboard->Close();
-    }
-}
-
 void CMainFrame::OnButtonChange(wxCommandEvent& event)
 {
     CYourAddressDialog dialog(this, string(m_textCtrlAddress->GetValue()));
@@ -1224,7 +1104,17 @@ void CMainFrame::OnButtonChange(wxCommandEvent& event)
     }
 }
 
-void CMainFrame::OnListItemActivatedAllTransactions(wxListEvent& event)
+void CMainFrame::OnButtonCopy(wxCommandEvent& event)
+{
+    // Copy address box to clipboard
+    if (wxTheClipboard->Open())
+    {
+        wxTheClipboard->SetData(new wxTextDataObject(m_textCtrlAddress->GetValue()));
+        wxTheClipboard->Close();
+    }
+}
+
+void CMainFrame::OnListItemActivated(wxListEvent& event)
 {
     uint256 hash((string)GetItemText(m_listCtrl, event.GetIndex(), 1));
     CWalletTx wtx;
@@ -1233,7 +1123,7 @@ void CMainFrame::OnListItemActivatedAllTransactions(wxListEvent& event)
         map<uint256, CWalletTx>::iterator mi = mapWallet.find(hash);
         if (mi == mapWallet.end())
         {
-            printf("CMainFrame::OnListItemActivatedAllTransactions() : tx not found in mapWallet\n");
+            printf("CMainFrame::OnListItemActivated() : tx not found in mapWallet\n");
             return;
         }
         wtx = (*mi).second;
@@ -1242,28 +1132,6 @@ void CMainFrame::OnListItemActivatedAllTransactions(wxListEvent& event)
     dialog.ShowModal();
     //CTxDetailsDialog* pdialog = new CTxDetailsDialog(this, wtx);
     //pdialog->Show();
-}
-
-void CMainFrame::OnListItemActivatedProductsSent(wxListEvent& event)
-{
-    CProduct& product = *(CProduct*)event.GetItem().GetData();
-    CEditProductDialog* pdialog = new CEditProductDialog(this);
-    pdialog->SetProduct(product);
-    pdialog->Show();
-}
-
-void CMainFrame::OnListItemActivatedOrdersSent(wxListEvent& event)
-{
-    CWalletTx& order = *(CWalletTx*)event.GetItem().GetData();
-    CViewOrderDialog* pdialog = new CViewOrderDialog(this, order, false);
-    pdialog->Show();
-}
-
-void CMainFrame::OnListItemActivatedOrdersReceived(wxListEvent& event)
-{
-    CWalletTx& order = *(CWalletTx*)event.GetItem().GetData();
-    CViewOrderDialog* pdialog = new CViewOrderDialog(this, order, true);
-    pdialog->Show();
 }
 
 
@@ -1279,238 +1147,243 @@ void CMainFrame::OnListItemActivatedOrdersReceived(wxListEvent& event)
 
 CTxDetailsDialog::CTxDetailsDialog(wxWindow* parent, CWalletTx wtx) : CTxDetailsDialogBase(parent)
 {
-    string strHTML;
-    strHTML.reserve(4000);
-    strHTML += "<html><font face='verdana, arial, helvetica, sans-serif'>";
-
-    int64 nTime = wtx.GetTxTime();
-    int64 nCredit = wtx.GetCredit();
-    int64 nDebit = wtx.GetDebit();
-    int64 nNet = nCredit - nDebit;
-
-
-
-    strHTML += "<b>Status:</b> " + FormatTxStatus(wtx);
-    int nRequests = wtx.GetRequestCount();
-    if (nRequests != -1)
+    CRITICAL_BLOCK(cs_mapAddressBook)
     {
-        if (nRequests == 0)
-            strHTML += ", has not been successfully broadcast yet";
-        else if (nRequests == 1)
-            strHTML += strprintf(", broadcast through %d node", nRequests);
-        else
-            strHTML += strprintf(", broadcast through %d nodes", nRequests);
-    }
-    strHTML += "<br>";
+        string strHTML;
+        strHTML.reserve(4000);
+        strHTML += "<html><font face='verdana, arial, helvetica, sans-serif'>";
 
-    strHTML += "<b>Date:</b> " + (nTime ? DateTimeStr(nTime) : "") + "<br>";
+        int64 nTime = wtx.GetTxTime();
+        int64 nCredit = wtx.GetCredit();
+        int64 nDebit = wtx.GetDebit();
+        int64 nNet = nCredit - nDebit;
 
 
-    //
-    // From
-    //
-    if (wtx.IsCoinBase())
-    {
-        strHTML += "<b>Source:</b> Generated<br>";
-    }
-    else if (!wtx.mapValue["from"].empty())
-    {
-        // Online transaction
-        if (!wtx.mapValue["from"].empty())
-            strHTML += "<b>From:</b> " + HtmlEscape(wtx.mapValue["from"]) + "<br>";
-    }
-    else
-    {
-        // Offline transaction
-        if (nNet > 0)
+
+        strHTML += _("<b>Status:</b> ") + FormatTxStatus(wtx);
+        int nRequests = wtx.GetRequestCount();
+        if (nRequests != -1)
         {
-            // Credit
-            foreach(const CTxOut& txout, wtx.vout)
+            if (nRequests == 0)
+                strHTML += _(", has not been successfully broadcast yet");
+            else if (nRequests == 1)
+                strHTML += strprintf(_(", broadcast through %d node"), nRequests);
+            else
+                strHTML += strprintf(_(", broadcast through %d nodes"), nRequests);
+        }
+        strHTML += "<br>";
+
+        strHTML += _("<b>Date:</b> ") + (nTime ? DateTimeStr(nTime) : "") + "<br>";
+
+
+        //
+        // From
+        //
+        if (wtx.IsCoinBase())
+        {
+            strHTML += _("<b>Source:</b> Generated<br>");
+        }
+        else if (!wtx.mapValue["from"].empty())
+        {
+            // Online transaction
+            if (!wtx.mapValue["from"].empty())
+                strHTML += _("<b>From:</b> ") + HtmlEscape(wtx.mapValue["from"]) + "<br>";
+        }
+        else
+        {
+            // Offline transaction
+            if (nNet > 0)
             {
-                if (txout.IsMine())
+                // Credit
+                foreach(const CTxOut& txout, wtx.vout)
                 {
-                    vector<unsigned char> vchPubKey;
-                    if (ExtractPubKey(txout.scriptPubKey, true, vchPubKey))
+                    if (txout.IsMine())
                     {
-                        string strAddress = PubKeyToAddress(vchPubKey);
-                        if (mapAddressBook.count(strAddress))
+                        vector<unsigned char> vchPubKey;
+                        if (ExtractPubKey(txout.scriptPubKey, true, vchPubKey))
                         {
-                            strHTML += "<b>From:</b> unknown<br>";
-                            strHTML += "<b>To:</b> ";
-                            strHTML += HtmlEscape(strAddress);
-                            if (!mapAddressBook[strAddress].empty())
-                                strHTML += " (yours, label: " + mapAddressBook[strAddress] + ")";
-                            else
-                                strHTML += " (yours)";
+                            string strAddress = PubKeyToAddress(vchPubKey);
+                            if (mapAddressBook.count(strAddress))
+                            {
+                                strHTML += string() + _("<b>From:</b> ") + _("unknown") + "<br>";
+                                strHTML += _("<b>To:</b> ");
+                                strHTML += HtmlEscape(strAddress);
+                                if (!mapAddressBook[strAddress].empty())
+                                    strHTML += _(" (yours, label: ") + mapAddressBook[strAddress] + ")";
+                                else
+                                    strHTML += _(" (yours)");
+                                strHTML += "<br>";
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+
+        //
+        // To
+        //
+        string strAddress;
+        if (!wtx.mapValue["to"].empty())
+        {
+            // Online transaction
+            strAddress = wtx.mapValue["to"];
+            strHTML += _("<b>To:</b> ");
+            if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
+                strHTML += mapAddressBook[strAddress] + " ";
+            strHTML += HtmlEscape(strAddress) + "<br>";
+        }
+
+
+        //
+        // Amount
+        //
+        if (wtx.IsCoinBase() && nCredit == 0)
+        {
+            //
+            // Coinbase
+            //
+            int64 nUnmatured = 0;
+            foreach(const CTxOut& txout, wtx.vout)
+                nUnmatured += txout.GetCredit();
+            strHTML += _("<b>Credit:</b> ");
+            if (wtx.IsInMainChain())
+                strHTML += strprintf(_("(%s matures in %d more blocks)"), FormatMoney(nUnmatured).c_str(), wtx.GetBlocksToMaturity());
+            else
+                strHTML += _("(not accepted)");
+            strHTML += "<br>";
+        }
+        else if (nNet > 0)
+        {
+            //
+            // Credit
+            //
+            strHTML += _("<b>Credit:</b> ") + FormatMoney(nNet) + "<br>";
+        }
+        else
+        {
+            bool fAllFromMe = true;
+            foreach(const CTxIn& txin, wtx.vin)
+                fAllFromMe = fAllFromMe && txin.IsMine();
+
+            bool fAllToMe = true;
+            foreach(const CTxOut& txout, wtx.vout)
+                fAllToMe = fAllToMe && txout.IsMine();
+
+            if (fAllFromMe)
+            {
+                //
+                // Debit
+                //
+                foreach(const CTxOut& txout, wtx.vout)
+                {
+                    if (txout.IsMine())
+                        continue;
+
+                    if (wtx.mapValue["to"].empty())
+                    {
+                        // Offline transaction
+                        uint160 hash160;
+                        if (ExtractHash160(txout.scriptPubKey, hash160))
+                        {
+                            string strAddress = Hash160ToAddress(hash160);
+                            strHTML += _("<b>To:</b> ");
+                            if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
+                                strHTML += mapAddressBook[strAddress] + " ";
+                            strHTML += strAddress;
                             strHTML += "<br>";
                         }
                     }
-                    break;
+
+                    strHTML += _("<b>Debit:</b> ") + FormatMoney(-txout.nValue) + "<br>";
                 }
-            }
-        }
-    }
 
-
-    //
-    // To
-    //
-    string strAddress;
-    if (!wtx.mapValue["to"].empty())
-    {
-        // Online transaction
-        strAddress = wtx.mapValue["to"];
-        strHTML += "<b>To:</b> ";
-        if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
-            strHTML += mapAddressBook[strAddress] + " ";
-        strHTML += HtmlEscape(strAddress) + "<br>";
-    }
-
-
-    //
-    // Amount
-    //
-    if (wtx.IsCoinBase() && nCredit == 0)
-    {
-        //
-        // Coinbase
-        //
-        int64 nUnmatured = 0;
-        foreach(const CTxOut& txout, wtx.vout)
-            nUnmatured += txout.GetCredit();
-        if (wtx.IsInMainChain())
-            strHTML += strprintf("<b>Credit:</b> (%s matures in %d more blocks)<br>", FormatMoney(nUnmatured).c_str(), wtx.GetBlocksToMaturity());
-        else
-            strHTML += "<b>Credit:</b> (not accepted)<br>";
-    }
-    else if (nNet > 0)
-    {
-        //
-        // Credit
-        //
-        strHTML += "<b>Credit:</b> " + FormatMoney(nNet) + "<br>";
-    }
-    else
-    {
-        bool fAllFromMe = true;
-        foreach(const CTxIn& txin, wtx.vin)
-            fAllFromMe = fAllFromMe && txin.IsMine();
-
-        bool fAllToMe = true;
-        foreach(const CTxOut& txout, wtx.vout)
-            fAllToMe = fAllToMe && txout.IsMine();
-
-        if (fAllFromMe)
-        {
-            //
-            // Debit
-            //
-            foreach(const CTxOut& txout, wtx.vout)
-            {
-                if (txout.IsMine())
-                    continue;
-
-                if (wtx.mapValue["to"].empty())
+                if (fAllToMe)
                 {
-                    // Offline transaction
-                    uint160 hash160;
-                    if (ExtractHash160(txout.scriptPubKey, hash160))
-                    {
-                        string strAddress = Hash160ToAddress(hash160);
-                        strHTML += "<b>To:</b> ";
-                        if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
-                            strHTML += mapAddressBook[strAddress] + " ";
-                        strHTML += strAddress;
-                        strHTML += "<br>";
-                    }
+                    // Payment to self
+                    /// issue: can't tell which is the payment and which is the change anymore
+                    //int64 nValue = wtx.vout[0].nValue;
+                    //strHTML += _("<b>Debit:</b> ") + FormatMoney(-nValue) + "<br>";
+                    //strHTML += _("<b>Credit:</b> ") + FormatMoney(nValue) + "<br>";
                 }
 
-                strHTML += "<b>Debit:</b> " + FormatMoney(-txout.nValue) + "<br>";
+                int64 nTxFee = nDebit - wtx.GetValueOut();
+                if (nTxFee > 0)
+                    strHTML += _("<b>Transaction fee:</b> ") + FormatMoney(-nTxFee) + "<br>";
             }
-
-            if (fAllToMe)
+            else
             {
-                // Payment to self
-                /// issue: can't tell which is the payment and which is the change anymore
-                //int64 nValue = wtx.vout[0].nValue;
-                //strHTML += "<b>Debit:</b> " + FormatMoney(-nValue) + "<br>";
-                //strHTML += "<b>Credit:</b> " + FormatMoney(nValue) + "<br>";
+                //
+                // Mixed debit transaction
+                //
+                foreach(const CTxIn& txin, wtx.vin)
+                    if (txin.IsMine())
+                        strHTML += _("<b>Debit:</b> ") + FormatMoney(-txin.GetDebit()) + "<br>";
+                foreach(const CTxOut& txout, wtx.vout)
+                    if (txout.IsMine())
+                        strHTML += _("<b>Credit:</b> ") + FormatMoney(txout.GetCredit()) + "<br>";
             }
-
-            int64 nTxFee = nDebit - wtx.GetValueOut();
-            if (nTxFee > 0)
-                strHTML += "<b>Transaction fee:</b> " + FormatMoney(-nTxFee) + "<br>";
         }
-        else
+
+        strHTML += _("<b>Net amount:</b> ") + FormatMoney(nNet, true) + "<br>";
+
+
+        //
+        // Message
+        //
+        if (!wtx.mapValue["message"].empty())
+            strHTML += string() + "<br><b>" + _("Message:") + "</b><br>" + HtmlEscape(wtx.mapValue["message"], true) + "<br>";
+
+        if (wtx.IsCoinBase())
+            strHTML += string() + "<br>" + _("Generated coins must wait 120 blocks before they can be spent.  When you generated this block, it was broadcast to the network to be added to the block chain.  If it fails to get into the chain, it will change to \"not accepted\" and not be spendable.  This may occasionally happen if another node generates a block within a few seconds of yours.") + "<br>";
+
+
+        //
+        // Debug view
+        //
+        if (fDebug)
         {
-            //
-            // Mixed debit transaction
-            //
+            strHTML += "<hr><br>debug print<br><br>";
             foreach(const CTxIn& txin, wtx.vin)
                 if (txin.IsMine())
                     strHTML += "<b>Debit:</b> " + FormatMoney(-txin.GetDebit()) + "<br>";
             foreach(const CTxOut& txout, wtx.vout)
                 if (txout.IsMine())
                     strHTML += "<b>Credit:</b> " + FormatMoney(txout.GetCredit()) + "<br>";
-        }
-    }
 
-    strHTML += "<b>Net amount:</b> " + FormatMoney(nNet, true) + "<br>";
-
-
-    //
-    // Message
-    //
-    if (!wtx.mapValue["message"].empty())
-        strHTML += "<br><b>Message:</b><br>" + HtmlEscape(wtx.mapValue["message"], true) + "<br>";
-
-    if (wtx.IsCoinBase())
-        strHTML += "<br>Generated coins must wait 120 blocks before they can be spent.  When you generated this block, it was broadcast to the network to be added to the block chain.  If it fails to get into the chain, it will change to \"not accepted\" and not be spendable.  This may occasionally happen if another node generates a block within a few seconds of yours.<br>";
-
-
-    //
-    // Debug view
-    //
-    if (fDebug)
-    {
-        strHTML += "<hr><br>debug print<br><br>";
-        foreach(const CTxIn& txin, wtx.vin)
-            if (txin.IsMine())
-                strHTML += "<b>Debit:</b> " + FormatMoney(-txin.GetDebit()) + "<br>";
-        foreach(const CTxOut& txout, wtx.vout)
-            if (txout.IsMine())
-                strHTML += "<b>Credit:</b> " + FormatMoney(txout.GetCredit()) + "<br>";
-
-        strHTML += "<b>Inputs:</b><br>";
-        CRITICAL_BLOCK(cs_mapWallet)
-        {
-            foreach(const CTxIn& txin, wtx.vin)
+            strHTML += "<b>Inputs:</b><br>";
+            CRITICAL_BLOCK(cs_mapWallet)
             {
-                COutPoint prevout = txin.prevout;
-                map<uint256, CWalletTx>::iterator mi = mapWallet.find(prevout.hash);
-                if (mi != mapWallet.end())
+                foreach(const CTxIn& txin, wtx.vin)
                 {
-                    const CWalletTx& prev = (*mi).second;
-                    if (prevout.n < prev.vout.size())
+                    COutPoint prevout = txin.prevout;
+                    map<uint256, CWalletTx>::iterator mi = mapWallet.find(prevout.hash);
+                    if (mi != mapWallet.end())
                     {
-                        strHTML += HtmlEscape(prev.ToString(), true);
-                        strHTML += " &nbsp;&nbsp; " + FormatTxStatus(prev) + ", ";
-                        strHTML = strHTML + "IsMine=" + (prev.vout[prevout.n].IsMine() ? "true" : "false") + "<br>";
+                        const CWalletTx& prev = (*mi).second;
+                        if (prevout.n < prev.vout.size())
+                        {
+                            strHTML += HtmlEscape(prev.ToString(), true);
+                            strHTML += " &nbsp;&nbsp; " + FormatTxStatus(prev) + ", ";
+                            strHTML = strHTML + "IsMine=" + (prev.vout[prevout.n].IsMine() ? "true" : "false") + "<br>";
+                        }
                     }
                 }
             }
+
+            strHTML += "<br><hr><br><b>Transaction:</b><br>";
+            strHTML += HtmlEscape(wtx.ToString(), true);
         }
 
-        strHTML += "<br><hr><br><b>Transaction:</b><br>";
-        strHTML += HtmlEscape(wtx.ToString(), true);
+
+
+        strHTML += "</font></html>";
+        string(strHTML.begin(), strHTML.end()).swap(strHTML);
+        m_htmlWin->SetPage(strHTML);
+        m_buttonOK->SetFocus();
     }
-
-
-
-    strHTML += "</font></html>";
-    string(strHTML.begin(), strHTML.end()).swap(strHTML);
-    m_htmlWin->SetPage(strHTML);
-    m_buttonOK->SetFocus();
 }
 
 void CTxDetailsDialog::OnButtonOK(wxCommandEvent& event)
@@ -1531,12 +1404,12 @@ void CTxDetailsDialog::OnButtonOK(wxCommandEvent& event)
 COptionsDialog::COptionsDialog(wxWindow* parent) : COptionsDialogBase(parent)
 {
     // Set up list box of page choices
-    m_listBox->Append("Main");
-    //m_listBox->Append("Test 2");
+    m_listBox->Append(_("Main"));
+    //m_listBox->Append(_("Test 2"));
     m_listBox->SetSelection(0);
     SelectPage(0);
 #ifndef __WXMSW__
-    m_checkBoxMinimizeOnClose->SetLabel("&Minimize on close");
+    m_checkBoxMinimizeOnClose->SetLabel(_("&Minimize on close"));
     m_checkBoxStartOnSystemStartup->Enable(false); // not implemented yet
 #endif
 
@@ -1688,15 +1561,25 @@ void COptionsDialog::OnButtonApply(wxCommandEvent& event)
 
 CAboutDialog::CAboutDialog(wxWindow* parent) : CAboutDialogBase(parent)
 {
-    m_staticTextVersion->SetLabel(strprintf("version 0.%d.%d beta", VERSION/100, VERSION%100));
+    m_staticTextVersion->SetLabel(strprintf(_("version 0.%d.%d beta"), VERSION/100, VERSION%100));
 
-    // Workaround until upgrade to wxWidgets supporting UTF-8
+    // Change (c) into UTF-8 or ANSI copyright symbol
     wxString str = m_staticTextMain->GetLabel();
-    if (str.Find('Â') != wxNOT_FOUND)
-        str.Remove(str.Find('Â'), 1);
+#if wxUSE_UNICODE
+    str.Replace("(c)", wxString::FromUTF8("\xC2\xA9"));
+#else
+    str.Replace("(c)", "\xA9");
+#endif
     m_staticTextMain->SetLabel(str);
 #ifndef __WXMSW__
-    SetSize(510, 380);
+    // Resize on Linux to make the window fit the text.
+    // The text was wrapped manually rather than using the Wrap setting because
+    // the wrap would be too small on Linux and it can't be changed at this point.
+    wxFont fontTmp = m_staticTextMain->GetFont();
+    if (fontTmp.GetPointSize() > 8);
+        fontTmp.SetPointSize(8);
+    m_staticTextMain->SetFont(fontTmp);
+    SetSize(GetSize().GetWidth() + 44, GetSize().GetHeight() + 10);
 #endif
 }
 
@@ -1729,7 +1612,7 @@ CSendDialog::CSendDialog(wxWindow* parent, const wxString& strAddress) : CSendDi
     if (fontTmp.GetPointSize() > 9);
         fontTmp.SetPointSize(9);
     m_staticTextInstructions->SetFont(fontTmp);
-    SetSize(725, wxDefaultCoord);
+    SetSize(725, 380);
 #endif
 
     // Set Icon
@@ -1763,8 +1646,8 @@ void CSendDialog::OnTextAddress(wxCommandEvent& event)
     {
         strFromSave    = m_textCtrlFrom->GetValue();
         strMessageSave = m_textCtrlMessage->GetValue();
-        m_textCtrlFrom->SetValue("Will appear as \"From: Unknown\"");
-        m_textCtrlMessage->SetValue("Can't include a message when sending to a Bitcoin address");
+        m_textCtrlFrom->SetValue(_("Will appear as \"From: Unknown\""));
+        m_textCtrlMessage->SetValue(_("Can't include a message when sending to a Bitcoin address"));
     }
     else if (fEnable && !fEnabledPrev)
     {
@@ -1816,17 +1699,17 @@ void CSendDialog::OnButtonSend(wxCommandEvent& event)
     int64 nValue = 0;
     if (!ParseMoney(m_textCtrlAmount->GetValue(), nValue) || nValue <= 0)
     {
-        wxMessageBox("Error in amount  ", "Send Coins");
+        wxMessageBox(_("Error in amount  "), _("Send Coins"));
         return;
     }
     if (nValue > GetBalance())
     {
-        wxMessageBox("Amount exceeds your balance  ", "Send Coins");
+        wxMessageBox(_("Amount exceeds your balance  "), _("Send Coins"));
         return;
     }
     if (nValue + nTransactionFee > GetBalance())
     {
-        wxMessageBox(string("Total exceeds your balance when the ") + FormatMoney(nTransactionFee) + " transaction fee is included  ", "Send Coins");
+        wxMessageBox(string(_("Total exceeds your balance when the ")) + FormatMoney(nTransactionFee) + _(" transaction fee is included  "), _("Send Coins"));
         return;
     }
 
@@ -1840,10 +1723,11 @@ void CSendDialog::OnButtonSend(wxCommandEvent& event)
         CScript scriptPubKey;
         scriptPubKey << OP_DUP << OP_HASH160 << hash160 << OP_EQUALVERIFY << OP_CHECKSIG;
 
-        if (!SendMoney(scriptPubKey, nValue, wtx))
-            return;
-
-        wxMessageBox("Payment sent  ", "Sending...");
+        string strError = SendMoney(scriptPubKey, nValue, wtx);
+        if (strError != "")
+            wxMessageBox(strError + "  ", _("Sending..."));
+        else
+            wxMessageBox(_("Payment sent  "), _("Sending..."));
     }
     else
     {
@@ -1851,7 +1735,7 @@ void CSendDialog::OnButtonSend(wxCommandEvent& event)
         CAddress addr(strAddress);
         if (!addr.IsValid())
         {
-            wxMessageBox("Invalid address  ", "Send Coins");
+            wxMessageBox(_("Invalid address  "), _("Send Coins"));
             return;
         }
 
@@ -1866,8 +1750,9 @@ void CSendDialog::OnButtonSend(wxCommandEvent& event)
             return;
     }
 
-    if (!mapAddressBook.count(strAddress))
-        SetAddressBookName(strAddress, "");
+    CRITICAL_BLOCK(cs_mapAddressBook)
+        if (!mapAddressBook.count(strAddress))
+            SetAddressBookName(strAddress, "");
 
     EndModal(true);
 }
@@ -1901,10 +1786,10 @@ CSendingDialog::CSendingDialog(wxWindow* parent, const CAddress& addrIn, int64 n
     fUIDone = false;
     fWorkDone = false;
 #ifndef __WXMSW__
-    SetSize(1.2 * GetSize().GetWidth(), 1.05 * GetSize().GetHeight());
+    SetSize(1.2 * GetSize().GetWidth(), 1.08 * GetSize().GetHeight());
 #endif
 
-    SetTitle(strprintf("Sending %s to %s", FormatMoney(nPrice).c_str(), wtx.mapValue["to"].c_str()));
+    SetTitle(strprintf(_("Sending %s to %s"), FormatMoney(nPrice).c_str(), wtx.mapValue["to"].c_str()));
     m_textCtrlStatus->SetValue("");
 
     CreateThread(SendingDialogStartTransfer, this);
@@ -1976,13 +1861,13 @@ void CSendingDialog::OnPaint(wxPaintEvent& event)
     }
     if (fAbort && fCanCancel && IsShown())
     {
-        strcpy(pszStatus, "CANCELLED");
+        strcpy(pszStatus, _("CANCELLED"));
         m_buttonOK->Enable(true);
         m_buttonOK->SetFocus();
         m_buttonCancel->Enable(false);
-        m_buttonCancel->SetLabel("Cancelled");
+        m_buttonCancel->SetLabel(_("Cancelled"));
         Close();
-        wxMessageBox("Transfer cancelled  ", "Sending...", wxOK, this);
+        wxMessageBox(_("Transfer cancelled  "), _("Sending..."), wxOK, this);
     }
     event.Skip();
 }
@@ -1997,7 +1882,7 @@ void CSendingDialog::Repaint()
 {
     Refresh();
     wxPaintEvent event;
-    AddPendingEvent(event);
+    GetEventHandler()->AddPendingEvent(event);
 }
 
 bool CSendingDialog::Status()
@@ -2010,7 +1895,7 @@ bool CSendingDialog::Status()
     if (fAbort && fCanCancel)
     {
         memset(pszStatus, 0, 10);
-        strcpy(pszStatus, "CANCELLED");
+        strcpy(pszStatus, _("CANCELLED"));
         Repaint();
         fWorkDone = true;
         return false;
@@ -2036,7 +1921,7 @@ bool CSendingDialog::Error(const string& str)
 {
     fCanCancel = false;
     fWorkDone = true;
-    Status(string("Error: ") + str);
+    Status(string(_("Error: ")) + str);
     return false;
 }
 
@@ -2050,22 +1935,22 @@ void CSendingDialog::StartTransfer()
     // Make sure we have enough money
     if (nPrice + nTransactionFee > GetBalance())
     {
-        Error("You don't have enough money");
+        Error(_("You don't have enough money"));
         return;
     }
 
     // We may have connected already for product details
-    if (!Status("Connecting..."))
+    if (!Status(_("Connecting...")))
         return;
     CNode* pnode = ConnectNode(addr, 15 * 60);
     if (!pnode)
     {
-        Error("Unable to connect");
+        Error(_("Unable to connect"));
         return;
     }
 
     // Send order to seller, with response going to OnReply2 via event handler
-    if (!Status("Requesting public key..."))
+    if (!Status(_("Requesting public key...")))
         return;
     pnode->PushRequest("checkorder", wtx, SendingDialogOnReply2, this);
 }
@@ -2077,7 +1962,7 @@ void SendingDialogOnReply2(void* parg, CDataStream& vRecv)
 
 void CSendingDialog::OnReply2(CDataStream& vRecv)
 {
-    if (!Status("Received public key..."))
+    if (!Status(_("Received public key...")))
         return;
 
     CScript scriptPubKey;
@@ -2089,7 +1974,7 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
         {
             string strMessage;
             vRecv >> strMessage;
-            Error("Transfer was not accepted");
+            Error(_("Transfer was not accepted"));
             //// todo: enlarge the window and enable a hidden white box to put seller's message
             return;
         }
@@ -2098,7 +1983,7 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
     catch (...)
     {
         //// what do we want to do about this?
-        Error("Invalid response received");
+        Error(_("Invalid response received"));
         return;
     }
 
@@ -2113,11 +1998,11 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
     CRITICAL_BLOCK(cs_main)
     {
         // Pay
-        if (!Status("Creating transaction..."))
+        if (!Status(_("Creating transaction...")))
             return;
         if (nPrice + nTransactionFee > GetBalance())
         {
-            Error("You don't have enough money");
+            Error(_("You don't have enough money"));
             return;
         }
         CKey key;
@@ -2125,9 +2010,9 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
         if (!CreateTransaction(scriptPubKey, nPrice, wtx, key, nFeeRequired))
         {
             if (nPrice + nFeeRequired > GetBalance())
-                Error(strprintf("This is an oversized transaction that requires a transaction fee of %s", FormatMoney(nFeeRequired).c_str()));
+                Error(strprintf(_("This is an oversized transaction that requires a transaction fee of %s"), FormatMoney(nFeeRequired).c_str()));
             else
-                Error("Transaction creation failed");
+                Error(_("Transaction creation failed"));
             return;
         }
 
@@ -2135,7 +2020,7 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
         CNode* pnode = ConnectNode(addr, 2 * 60 * 60);
         if (!pnode)
         {
-            Error("Lost connection, transaction cancelled");
+            Error(_("Lost connection, transaction cancelled"));
             return;
         }
 
@@ -2151,13 +2036,13 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
                 return;
             fCanCancel = false;
         }
-        if (!Status("Sending payment..."))
+        if (!Status(_("Sending payment...")))
             return;
 
         // Commit
         if (!CommitTransactionSpent(wtx, key))
         {
-            Error("Error finalizing payment");
+            Error(_("Error finalizing payment"));
             return;
         }
 
@@ -2169,7 +2054,7 @@ void CSendingDialog::OnReply2(CDataStream& vRecv)
             printf("ERROR: CSendingDialog : wtxNew.AcceptTransaction() %s failed\n", wtx.GetHash().ToString().c_str());
         wtx.RelayWalletTransaction();
 
-        Status("Waiting for confirmation...");
+        Status(_("Waiting for confirmation..."));
         MainFrameRepaint();
     }
 }
@@ -2187,22 +2072,22 @@ void CSendingDialog::OnReply3(CDataStream& vRecv)
         vRecv >> nRet;
         if (nRet > 0)
         {
-            Error("The payment was sent, but the recipient was unable to verify it.\n"
-                  "The transaction is recorded and will credit to the recipient,\n"
-                  "but the comment information will be blank.");
+            Error(_("The payment was sent, but the recipient was unable to verify it.\n"
+                    "The transaction is recorded and will credit to the recipient,\n"
+                    "but the comment information will be blank."));
             return;
         }
     }
     catch (...)
     {
         //// what do we want to do about this?
-        Error("Payment was sent, but an invalid response was received");
+        Error(_("Payment was sent, but an invalid response was received"));
         return;
     }
 
     fSuccess = true;
     fWorkDone = true;
-    Status("Payment completed");
+    Status(_("Payment completed"));
 }
 
 
@@ -2218,12 +2103,13 @@ void CSendingDialog::OnReply3(CDataStream& vRecv)
 CYourAddressDialog::CYourAddressDialog(wxWindow* parent, const string& strInitSelected) : CYourAddressDialogBase(parent)
 {
     // Init column headers
-    m_listCtrl->InsertColumn(0, "Label", wxLIST_FORMAT_LEFT, 200);
-    m_listCtrl->InsertColumn(1, "Bitcoin Address", wxLIST_FORMAT_LEFT, 350);
+    m_listCtrl->InsertColumn(0, _("Label"), wxLIST_FORMAT_LEFT, 200);
+    m_listCtrl->InsertColumn(1, _("Bitcoin Address"), wxLIST_FORMAT_LEFT, 350);
     m_listCtrl->SetFocus();
 
     // Fill listctrl with address book data
     CRITICAL_BLOCK(cs_mapKeys)
+    CRITICAL_BLOCK(cs_mapAddressBook)
     {
         foreach(const PAIRTYPE(string, string)& item, mapAddressBook)
         {
@@ -2278,7 +2164,7 @@ void CYourAddressDialog::OnButtonRename(wxCommandEvent& event)
         return;
     string strName = (string)m_listCtrl->GetItemText(nIndex);
     string strAddress = (string)GetItemText(m_listCtrl, nIndex, 1);
-    CGetTextFromUserDialog dialog(this, "Edit Address Label", "New Label", strName);
+    CGetTextFromUserDialog dialog(this, _("Edit Address Label"), _("New Label"), strName);
     if (!dialog.ShowModal())
         return;
     strName = dialog.GetValue();
@@ -2292,7 +2178,7 @@ void CYourAddressDialog::OnButtonRename(wxCommandEvent& event)
 void CYourAddressDialog::OnButtonNew(wxCommandEvent& event)
 {
     // Ask name
-    CGetTextFromUserDialog dialog(this, "New Bitcoin Address", "Label", "");
+    CGetTextFromUserDialog dialog(this, _("New Bitcoin Address"), _("Label"), "");
     if (!dialog.ShowModal())
         return;
     string strName = dialog.GetValue();
@@ -2352,8 +2238,8 @@ CAddressBookDialog::CAddressBookDialog(wxWindow* parent, const wxString& strInit
         m_buttonCancel->Show(false);
 
     // Init column headers
-    m_listCtrl->InsertColumn(0, "Name", wxLIST_FORMAT_LEFT, 200);
-    m_listCtrl->InsertColumn(1, "Address", wxLIST_FORMAT_LEFT, 350);
+    m_listCtrl->InsertColumn(0, _("Name"), wxLIST_FORMAT_LEFT, 200);
+    m_listCtrl->InsertColumn(1, _("Address"), wxLIST_FORMAT_LEFT, 350);
     m_listCtrl->SetFocus();
 
     // Set Icon
@@ -2363,6 +2249,7 @@ CAddressBookDialog::CAddressBookDialog(wxWindow* parent, const wxString& strInit
 
     // Fill listctrl with address book data
     CRITICAL_BLOCK(cs_mapKeys)
+    CRITICAL_BLOCK(cs_mapAddressBook)
     {
         foreach(const PAIRTYPE(string, string)& item, mapAddressBook)
         {
@@ -2422,7 +2309,7 @@ bool CAddressBookDialog::CheckIfMine(const string& strAddress, const string& str
     uint160 hash160;
     bool fMine = (AddressToHash160(strAddress, hash160) && mapPubKeys.count(hash160));
     if (fMine)
-        wxMessageBox("This is one of your own addresses for receiving payments and cannot be entered in the address book.  ", strTitle);
+        wxMessageBox(_("This is one of your own addresses for receiving payments and cannot be entered in the address book.  "), strTitle);
     return fMine;
 }
 
@@ -2437,13 +2324,13 @@ void CAddressBookDialog::OnButtonEdit(wxCommandEvent& event)
     string strAddressOrg = strAddress;
     do
     {
-        CGetTextFromUserDialog dialog(this, "Edit Address", "Name", strName, "Address", strAddress);
+        CGetTextFromUserDialog dialog(this, _("Edit Address"), _("Name"), strName, _("Address"), strAddress);
         if (!dialog.ShowModal())
             return;
         strName = dialog.GetValue1();
         strAddress = dialog.GetValue2();
     }
-    while (CheckIfMine(strAddress, "Edit Address"));
+    while (CheckIfMine(strAddress, _("Edit Address")));
 
     // Change name
     if (strAddress != strAddressOrg)
@@ -2461,13 +2348,13 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
     string strAddress;
     do
     {
-        CGetTextFromUserDialog dialog(this, "New Address", "Name", strName, "Address", strAddress);
+        CGetTextFromUserDialog dialog(this, _("New Address"), _("Name"), strName, _("Address"), strAddress);
         if (!dialog.ShowModal())
             return;
         strName = dialog.GetValue1();
         strAddress = dialog.GetValue2();
     }
-    while (CheckIfMine(strAddress, "New Address"));
+    while (CheckIfMine(strAddress, _("New Address")));
 
     // Add to list and select it
     SetAddressBookName(strAddress, strName);
@@ -2526,788 +2413,6 @@ void CAddressBookDialog::OnClose(wxCloseEvent& event)
 
 //////////////////////////////////////////////////////////////////////////////
 //
-// CProductsDialog
-//
-
-bool CompareIntStringPairBestFirst(const pair<int, string>& item1, const pair<int, string>& item2)
-{
-    return (item1.first > item2.first);
-}
-
-CProductsDialog::CProductsDialog(wxWindow* parent) : CProductsDialogBase(parent)
-{
-    // Init column headers
-    m_listCtrl->InsertColumn(0, "Title",  wxLIST_FORMAT_LEFT, 200);
-    m_listCtrl->InsertColumn(1, "Price",  wxLIST_FORMAT_LEFT, 80);
-    m_listCtrl->InsertColumn(2, "Seller", wxLIST_FORMAT_LEFT, 80);
-    m_listCtrl->InsertColumn(3, "Stars",  wxLIST_FORMAT_LEFT, 50);
-    m_listCtrl->InsertColumn(4, "Power",  wxLIST_FORMAT_LEFT, 50);
-
-    // Tally top categories
-    map<string, int> mapTopCategories;
-    CRITICAL_BLOCK(cs_mapProducts)
-        for (map<uint256, CProduct>::iterator mi = mapProducts.begin(); mi != mapProducts.end(); ++mi)
-            mapTopCategories[(*mi).second.mapValue["category"]]++;
-
-    // Sort top categories
-    vector<pair<int, string> > vTopCategories;
-    for (map<string, int>::iterator mi = mapTopCategories.begin(); mi != mapTopCategories.end(); ++mi)
-        vTopCategories.push_back(make_pair((*mi).second, (*mi).first));
-    sort(vTopCategories.begin(), vTopCategories.end(), CompareIntStringPairBestFirst);
-
-    // Fill categories combo box
-    int nLimit = 250;
-    for (vector<pair<int, string> >::iterator it = vTopCategories.begin(); it != vTopCategories.end() && nLimit-- > 0; ++it)
-        m_comboBoxCategory->Append((*it).second);
-
-    // Fill window with initial search
-    //wxCommandEvent event;
-    //OnButtonSearch(event);
-}
-
-void CProductsDialog::OnCombobox(wxCommandEvent& event)
-{
-    OnButtonSearch(event);
-}
-
-bool CompareProductsBestFirst(const CProduct* p1, const CProduct* p2)
-{
-    return (p1->nAtoms > p2->nAtoms);
-}
-
-void CProductsDialog::OnButtonSearch(wxCommandEvent& event)
-{
-    string strCategory = (string)m_comboBoxCategory->GetValue();
-    string strSearch = (string)m_textCtrlSearch->GetValue();
-
-    // Search products
-    vector<CProduct*> vProductsFound;
-    CRITICAL_BLOCK(cs_mapProducts)
-    {
-        for (map<uint256, CProduct>::iterator mi = mapProducts.begin(); mi != mapProducts.end(); ++mi)
-        {
-            CProduct& product = (*mi).second;
-            if (product.mapValue["category"].find(strCategory) != -1)
-            {
-                if (product.mapValue["title"].find(strSearch) != -1 ||
-                    product.mapValue["description"].find(strSearch) != -1 ||
-                    product.mapValue["seller"].find(strSearch) != -1)
-                {
-                    vProductsFound.push_back(&product);
-                }
-            }
-        }
-    }
-
-    // Sort
-    sort(vProductsFound.begin(), vProductsFound.end(), CompareProductsBestFirst);
-
-    // Display
-    foreach(CProduct* pproduct, vProductsFound)
-    {
-        InsertLine(m_listCtrl,
-                   pproduct->mapValue["title"],
-                   pproduct->mapValue["price"],
-                   pproduct->mapValue["seller"],
-                   pproduct->mapValue["stars"],
-                   itostr(pproduct->nAtoms));
-    }
-}
-
-void CProductsDialog::OnListItemActivated(wxListEvent& event)
-{
-    // Doubleclick opens product
-    CViewProductDialog* pdialog = new CViewProductDialog(this, m_vProduct[event.GetIndex()]);
-    pdialog->Show();
-}
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// CEditProductDialog
-//
-
-CEditProductDialog::CEditProductDialog(wxWindow* parent) : CEditProductDialogBase(parent)
-{
-    m_textCtrlLabel[0 ] = m_textCtrlLabel0;
-    m_textCtrlLabel[1 ] = m_textCtrlLabel1;
-    m_textCtrlLabel[2 ] = m_textCtrlLabel2;
-    m_textCtrlLabel[3 ] = m_textCtrlLabel3;
-    m_textCtrlLabel[4 ] = m_textCtrlLabel4;
-    m_textCtrlLabel[5 ] = m_textCtrlLabel5;
-    m_textCtrlLabel[6 ] = m_textCtrlLabel6;
-    m_textCtrlLabel[7 ] = m_textCtrlLabel7;
-    m_textCtrlLabel[8 ] = m_textCtrlLabel8;
-    m_textCtrlLabel[9 ] = m_textCtrlLabel9;
-    m_textCtrlLabel[10] = m_textCtrlLabel10;
-    m_textCtrlLabel[11] = m_textCtrlLabel11;
-    m_textCtrlLabel[12] = m_textCtrlLabel12;
-    m_textCtrlLabel[13] = m_textCtrlLabel13;
-    m_textCtrlLabel[14] = m_textCtrlLabel14;
-    m_textCtrlLabel[15] = m_textCtrlLabel15;
-    m_textCtrlLabel[16] = m_textCtrlLabel16;
-    m_textCtrlLabel[17] = m_textCtrlLabel17;
-    m_textCtrlLabel[18] = m_textCtrlLabel18;
-    m_textCtrlLabel[19] = m_textCtrlLabel19;
-
-    m_textCtrlField[0 ] = m_textCtrlField0;
-    m_textCtrlField[1 ] = m_textCtrlField1;
-    m_textCtrlField[2 ] = m_textCtrlField2;
-    m_textCtrlField[3 ] = m_textCtrlField3;
-    m_textCtrlField[4 ] = m_textCtrlField4;
-    m_textCtrlField[5 ] = m_textCtrlField5;
-    m_textCtrlField[6 ] = m_textCtrlField6;
-    m_textCtrlField[7 ] = m_textCtrlField7;
-    m_textCtrlField[8 ] = m_textCtrlField8;
-    m_textCtrlField[9 ] = m_textCtrlField9;
-    m_textCtrlField[10] = m_textCtrlField10;
-    m_textCtrlField[11] = m_textCtrlField11;
-    m_textCtrlField[12] = m_textCtrlField12;
-    m_textCtrlField[13] = m_textCtrlField13;
-    m_textCtrlField[14] = m_textCtrlField14;
-    m_textCtrlField[15] = m_textCtrlField15;
-    m_textCtrlField[16] = m_textCtrlField16;
-    m_textCtrlField[17] = m_textCtrlField17;
-    m_textCtrlField[18] = m_textCtrlField18;
-    m_textCtrlField[19] = m_textCtrlField19;
-
-    m_buttonDel[0 ] = m_buttonDel0;
-    m_buttonDel[1 ] = m_buttonDel1;
-    m_buttonDel[2 ] = m_buttonDel2;
-    m_buttonDel[3 ] = m_buttonDel3;
-    m_buttonDel[4 ] = m_buttonDel4;
-    m_buttonDel[5 ] = m_buttonDel5;
-    m_buttonDel[6 ] = m_buttonDel6;
-    m_buttonDel[7 ] = m_buttonDel7;
-    m_buttonDel[8 ] = m_buttonDel8;
-    m_buttonDel[9 ] = m_buttonDel9;
-    m_buttonDel[10] = m_buttonDel10;
-    m_buttonDel[11] = m_buttonDel11;
-    m_buttonDel[12] = m_buttonDel12;
-    m_buttonDel[13] = m_buttonDel13;
-    m_buttonDel[14] = m_buttonDel14;
-    m_buttonDel[15] = m_buttonDel15;
-    m_buttonDel[16] = m_buttonDel16;
-    m_buttonDel[17] = m_buttonDel17;
-    m_buttonDel[18] = m_buttonDel18;
-    m_buttonDel[19] = m_buttonDel19;
-
-    for (int i = 1; i < FIELDS_MAX; i++)
-        ShowLine(i, false);
-
-    LayoutAll();
-}
-
-void CEditProductDialog::LayoutAll()
-{
-    m_scrolledWindow->Layout();
-    m_scrolledWindow->GetSizer()->Fit(m_scrolledWindow);
-    this->Layout();
-}
-
-void CEditProductDialog::ShowLine(int i, bool fShow)
-{
-    m_textCtrlLabel[i]->Show(fShow);
-    m_textCtrlField[i]->Show(fShow);
-    m_buttonDel[i]->Show(fShow);
-}
-
-void CEditProductDialog::OnButtonDel0(wxCommandEvent& event)  { OnButtonDel(event, 0); }
-void CEditProductDialog::OnButtonDel1(wxCommandEvent& event)  { OnButtonDel(event, 1); }
-void CEditProductDialog::OnButtonDel2(wxCommandEvent& event)  { OnButtonDel(event, 2); }
-void CEditProductDialog::OnButtonDel3(wxCommandEvent& event)  { OnButtonDel(event, 3); }
-void CEditProductDialog::OnButtonDel4(wxCommandEvent& event)  { OnButtonDel(event, 4); }
-void CEditProductDialog::OnButtonDel5(wxCommandEvent& event)  { OnButtonDel(event, 5); }
-void CEditProductDialog::OnButtonDel6(wxCommandEvent& event)  { OnButtonDel(event, 6); }
-void CEditProductDialog::OnButtonDel7(wxCommandEvent& event)  { OnButtonDel(event, 7); }
-void CEditProductDialog::OnButtonDel8(wxCommandEvent& event)  { OnButtonDel(event, 8); }
-void CEditProductDialog::OnButtonDel9(wxCommandEvent& event)  { OnButtonDel(event, 9); }
-void CEditProductDialog::OnButtonDel10(wxCommandEvent& event) { OnButtonDel(event, 10); }
-void CEditProductDialog::OnButtonDel11(wxCommandEvent& event) { OnButtonDel(event, 11); }
-void CEditProductDialog::OnButtonDel12(wxCommandEvent& event) { OnButtonDel(event, 12); }
-void CEditProductDialog::OnButtonDel13(wxCommandEvent& event) { OnButtonDel(event, 13); }
-void CEditProductDialog::OnButtonDel14(wxCommandEvent& event) { OnButtonDel(event, 14); }
-void CEditProductDialog::OnButtonDel15(wxCommandEvent& event) { OnButtonDel(event, 15); }
-void CEditProductDialog::OnButtonDel16(wxCommandEvent& event) { OnButtonDel(event, 16); }
-void CEditProductDialog::OnButtonDel17(wxCommandEvent& event) { OnButtonDel(event, 17); }
-void CEditProductDialog::OnButtonDel18(wxCommandEvent& event) { OnButtonDel(event, 18); }
-void CEditProductDialog::OnButtonDel19(wxCommandEvent& event) { OnButtonDel(event, 19); }
-
-void CEditProductDialog::OnButtonDel(wxCommandEvent& event, int n)
-{
-    Freeze();
-    int x, y;
-    m_scrolledWindow->GetViewStart(&x, &y);
-    int i;
-    for (i = n; i < FIELDS_MAX-1; i++)
-    {
-        m_textCtrlLabel[i]->SetValue(m_textCtrlLabel[i+1]->GetValue());
-        m_textCtrlField[i]->SetValue(m_textCtrlField[i+1]->GetValue());
-        if (!m_buttonDel[i+1]->IsShown())
-            break;
-    }
-    m_textCtrlLabel[i]->SetValue("");
-    m_textCtrlField[i]->SetValue("");
-    ShowLine(i, false);
-    m_buttonAddField->Enable(true);
-    LayoutAll();
-    m_scrolledWindow->Scroll(0, y);
-    Thaw();
-}
-
-void CEditProductDialog::OnButtonAddField(wxCommandEvent& event)
-{
-    for (int i = 0; i < FIELDS_MAX; i++)
-    {
-        if (!m_buttonDel[i]->IsShown())
-        {
-            Freeze();
-            ShowLine(i, true);
-            if (i == FIELDS_MAX-1)
-                m_buttonAddField->Enable(false);
-            LayoutAll();
-            m_scrolledWindow->Scroll(0, 99999);
-            Thaw();
-            break;
-        }
-    }
-}
-
-void CEditProductDialog::OnButtonSend(wxCommandEvent& event)
-{
-    CProduct product;
-    GetProduct(product);
-
-    // Sign the detailed product
-    product.vchPubKeyFrom = keyUser.GetPubKey();
-    if (!keyUser.Sign(product.GetSigHash(), product.vchSig))
-    {
-        wxMessageBox("Error digitally signing the product  ");
-        return;
-    }
-
-    // Save detailed product
-    AddToMyProducts(product);
-
-    // Strip down to summary product
-    product.mapDetails.clear();
-    product.vOrderForm.clear();
-
-    // Sign the summary product
-    if (!keyUser.Sign(product.GetSigHash(), product.vchSig))
-    {
-        wxMessageBox("Error digitally signing the product  ");
-        return;
-    }
-
-    // Verify
-    if (!product.CheckProduct())
-    {
-        wxMessageBox("Errors found in product  ");
-        return;
-    }
-
-    // Broadcast
-    AdvertStartPublish(pnodeLocalHost, MSG_PRODUCT, 0, product);
-
-    Destroy();
-}
-
-void CEditProductDialog::OnButtonPreview(wxCommandEvent& event)
-{
-    CProduct product;
-    GetProduct(product);
-    CViewProductDialog* pdialog = new CViewProductDialog(this, product);
-    pdialog->Show();
-}
-
-void CEditProductDialog::OnButtonCancel(wxCommandEvent& event)
-{
-    Destroy();
-}
-
-void CEditProductDialog::SetProduct(const CProduct& productIn)
-{
-    CProduct product = productIn;
-
-    m_comboBoxCategory->SetValue(product.mapValue["category"]);
-    m_textCtrlTitle->SetValue(product.mapValue["title"]);
-    m_textCtrlPrice->SetValue(product.mapValue["price"]);
-    m_textCtrlDescription->SetValue(product.mapValue["description"]);
-    m_textCtrlInstructions->SetValue(product.mapValue["instructions"]);
-
-    for (int i = 0; i < FIELDS_MAX; i++)
-    {
-        bool fUsed = i < product.vOrderForm.size();
-        m_buttonDel[i]->Show(fUsed);
-        m_textCtrlLabel[i]->Show(fUsed);
-        m_textCtrlField[i]->Show(fUsed);
-        if (!fUsed)
-            continue;
-
-        m_textCtrlLabel[i]->SetValue(product.vOrderForm[i].first);
-        string strControl = product.vOrderForm[i].second;
-        if (strControl.substr(0, 5) == "text=")
-            m_textCtrlField[i]->SetValue("");
-        else if (strControl.substr(0, 7) == "choice=")
-            m_textCtrlField[i]->SetValue(strControl.substr(7));
-        else
-            m_textCtrlField[i]->SetValue(strControl);
-    }
-}
-
-void CEditProductDialog::GetProduct(CProduct& product)
-{
-    // map<string, string> mapValue;
-    // vector<pair<string, string> > vOrderForm;
-
-    product.mapValue["category"]     = m_comboBoxCategory->GetValue().Trim();
-    product.mapValue["title"]        = m_textCtrlTitle->GetValue().Trim();
-    product.mapValue["price"]        = m_textCtrlPrice->GetValue().Trim();
-    product.mapValue["description"]  = m_textCtrlDescription->GetValue().Trim();
-    product.mapValue["instructions"] = m_textCtrlInstructions->GetValue().Trim();
-
-    for (int i = 0; i < FIELDS_MAX; i++)
-    {
-        if (m_buttonDel[i]->IsShown())
-        {
-            string strLabel = (string)m_textCtrlLabel[i]->GetValue().Trim();
-            string strControl = (string)m_textCtrlField[i]->GetValue();
-            if (strControl.empty())
-                strControl = "text=";
-            else
-                strControl = "choice=" + strControl;
-            product.vOrderForm.push_back(make_pair(strLabel, strControl));
-        }
-    }
-}
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// CViewProductDialog
-//
-
-CViewProductDialog::CViewProductDialog(wxWindow* parent, const CProduct& productIn) : CViewProductDialogBase(parent)
-{
-    Connect(wxEVT_REPLY1, wxCommandEventHandler(CViewProductDialog::OnReply1), NULL, this);
-    AddCallbackAvailable(GetEventHandler());
-
-    // Fill display with product summary while waiting for details
-    product = productIn;
-    UpdateProductDisplay(false);
-
-    m_buttonBack->Enable(false);
-    m_buttonNext->Enable(!product.vOrderForm.empty());
-    m_htmlWinReviews->Show(true);
-    m_scrolledWindow->Show(false);
-    this->Layout();
-
-    // Request details from seller
-    CreateThread(ThreadRequestProductDetails, new pair<CProduct, wxEvtHandler*>(product, GetEventHandler()));
-}
-
-CViewProductDialog::~CViewProductDialog()
-{
-    RemoveCallbackAvailable(GetEventHandler());
-}
-
-void ThreadRequestProductDetails(void* parg)
-{
-    // Extract parameters
-    pair<CProduct, wxEvtHandler*>* pitem = (pair<CProduct, wxEvtHandler*>*)parg;
-    CProduct product = pitem->first;
-    wxEvtHandler* pevthandler = pitem->second;
-    delete pitem;
-
-    // Connect to seller
-    CNode* pnode = ConnectNode(product.addr, 5 * 60);
-    if (!pnode)
-    {
-        CDataStream ssEmpty;
-        AddPendingReplyEvent1(pevthandler, ssEmpty);
-        return;
-    }
-
-    // Request detailed product, with response going to OnReply1 via dialog's event handler
-    pnode->PushRequest("getdetails", product.GetHash(), AddPendingReplyEvent1, (void*)pevthandler);
-}
-
-void CViewProductDialog::OnReply1(wxCommandEvent& event)
-{
-    CDataStream ss = GetStreamFromEvent(event);
-    if (ss.empty())
-    {
-        product.mapValue["description"] = "-- CAN'T CONNECT TO SELLER --\n";
-        UpdateProductDisplay(true);
-        return;
-    }
-
-    int nRet;
-    CProduct product2;
-    try
-    {
-        ss >> nRet;
-        if (nRet > 0)
-            throw false;
-        ss >> product2;
-        if (product2.GetHash() != product.GetHash())
-            throw false;
-        if (!product2.CheckSignature())
-            throw false;
-    }
-    catch (...)
-    {
-        product.mapValue["description"] = "-- INVALID RESPONSE --\n";
-        UpdateProductDisplay(true);
-        return;
-    }
-
-    product = product2;
-    UpdateProductDisplay(true);
-}
-
-bool CompareReviewsBestFirst(const CReview* p1, const CReview* p2)
-{
-    return (p1->nAtoms > p2->nAtoms);
-}
-
-void CViewProductDialog::UpdateProductDisplay(bool fDetails)
-{
-    // Product and reviews
-    string strHTML;
-    strHTML.reserve(4000);
-    strHTML += "<html>\n"
-               "<head>\n"
-               "<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">\n"
-               "</head>\n"
-               "<body>\n";
-    strHTML += "<b>Category:</b> " + HtmlEscape(product.mapValue["category"]) + "<br>\n";
-    strHTML += "<b>Title:</b> "    + HtmlEscape(product.mapValue["title"])    + "<br>\n";
-    strHTML += "<b>Price:</b> "    + HtmlEscape(product.mapValue["price"])    + "<br>\n";
-
-    if (!fDetails)
-        strHTML += "<b>Loading details...</b><br>\n<br>\n";
-    else
-        strHTML += HtmlEscape(product.mapValue["description"], true) + "<br>\n<br>\n";
-
-    strHTML += "<b>Reviews:</b><br>\n<br>\n";
-
-    if (!product.vchPubKeyFrom.empty())
-    {
-        CReviewDB reviewdb("r");
-
-        // Get reviews
-        vector<CReview> vReviews;
-        reviewdb.ReadReviews(product.GetUserHash(), vReviews);
-
-        // Get reviewer's number of atoms
-        vector<CReview*> vSortedReviews;
-        vSortedReviews.reserve(vReviews.size());
-        for (vector<CReview>::reverse_iterator it = vReviews.rbegin(); it != vReviews.rend(); ++it)
-        {
-            CReview& review = *it;
-            CUser user;
-            reviewdb.ReadUser(review.GetUserHash(), user);
-            review.nAtoms = user.GetAtomCount();
-            vSortedReviews.push_back(&review);
-        }
-
-        reviewdb.Close();
-
-        // Sort
-        stable_sort(vSortedReviews.begin(), vSortedReviews.end(), CompareReviewsBestFirst);
-
-        // Format reviews
-        foreach(CReview* preview, vSortedReviews)
-        {
-            CReview& review = *preview;
-            int nStars = atoi(review.mapValue["stars"].c_str());
-            if (nStars < 1 || nStars > 5)
-                continue;
-
-            strHTML += "<b>" + itostr(nStars) + (nStars == 1 ? " star" : " stars") + "</b>";
-            strHTML += " &nbsp;&nbsp;&nbsp; ";
-            strHTML += DateStr(atoi64(review.mapValue["date"])) + "<br>\n";
-            strHTML += HtmlEscape(review.mapValue["review"], true);
-            strHTML += "<br>\n<br>\n";
-        }
-    }
-
-    strHTML += "</body>\n</html>\n";
-
-    // Shrink capacity to fit
-    string(strHTML.begin(), strHTML.end()).swap(strHTML);
-
-    m_htmlWinReviews->SetPage(strHTML);
-
-    ///// need to find some other indicator to use so can allow empty order form
-    if (product.vOrderForm.empty())
-        return;
-
-    // Order form
-    m_staticTextInstructions->SetLabel(product.mapValue["instructions"]);
-    for (int i = 0; i < FIELDS_MAX; i++)
-    {
-        m_staticTextLabel[i] = NULL;
-        m_textCtrlField[i] = NULL;
-        m_choiceField[i] = NULL;
-    }
-
-    // Construct flexgridsizer
-    wxBoxSizer* bSizer21 = (wxBoxSizer*)m_scrolledWindow->GetSizer();
-    wxFlexGridSizer* fgSizer;
-    fgSizer = new wxFlexGridSizer(0, 2, 0, 0);
-    fgSizer->AddGrowableCol(1);
-    fgSizer->SetFlexibleDirection(wxBOTH);
-    fgSizer->SetNonFlexibleGrowMode(wxFLEX_GROWMODE_SPECIFIED);
-
-    // Construct order form fields
-    wxWindow* windowLast = NULL;
-    for (int i = 0; i < product.vOrderForm.size(); i++)
-    {
-        string strLabel = product.vOrderForm[i].first;
-        string strControl = product.vOrderForm[i].second;
-
-        if (strLabel.size() < 20)
-            strLabel.insert(strLabel.begin(), 20 - strLabel.size(), ' ');
-
-        m_staticTextLabel[i] = new wxStaticText(m_scrolledWindow, wxID_ANY, strLabel, wxDefaultPosition, wxDefaultSize, wxALIGN_RIGHT);
-        m_staticTextLabel[i]->Wrap(-1);
-        fgSizer->Add(m_staticTextLabel[i], 0, wxALIGN_CENTER_VERTICAL|wxALIGN_RIGHT|wxALL, 5);
-
-        if (strControl.substr(0, 5) == "text=")
-        {
-            m_textCtrlField[i] = new wxTextCtrl(m_scrolledWindow, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
-            fgSizer->Add(m_textCtrlField[i], 1, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5);
-            windowLast = m_textCtrlField[i];
-        }
-        else if (strControl.substr(0, 7) == "choice=")
-        {
-            vector<string> vChoices;
-            ParseString(strControl.substr(7), ',', vChoices);
-
-            wxArrayString arraystring;
-            foreach(const string& str, vChoices)
-                arraystring.Add(str);
-
-            m_choiceField[i] = new wxChoice(m_scrolledWindow, wxID_ANY, wxDefaultPosition, wxDefaultSize, arraystring, 0);
-            fgSizer->Add(m_choiceField[i], 0, wxALL|wxALIGN_CENTER_VERTICAL, 5);
-            windowLast = m_choiceField[i];
-        }
-        else
-        {
-            m_textCtrlField[i] = new wxTextCtrl(m_scrolledWindow, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
-            fgSizer->Add(m_textCtrlField[i], 1, wxALL|wxALIGN_CENTER_VERTICAL|wxEXPAND, 5);
-            m_staticTextLabel[i]->Show(false);
-            m_textCtrlField[i]->Show(false);
-        }
-    }
-
-    // Insert after instructions and before submit/cancel buttons
-    bSizer21->Insert(2, fgSizer, 0, wxEXPAND|wxRIGHT|wxLEFT, 5);
-    m_scrolledWindow->Layout();
-    bSizer21->Fit(m_scrolledWindow);
-    this->Layout();
-
-    // Fixup the tab order
-    m_buttonSubmitForm->MoveAfterInTabOrder(windowLast);
-    m_buttonCancelForm->MoveAfterInTabOrder(m_buttonSubmitForm);
-    //m_buttonBack->MoveAfterInTabOrder(m_buttonCancelForm);
-    //m_buttonNext->MoveAfterInTabOrder(m_buttonBack);
-    //m_buttonCancel->MoveAfterInTabOrder(m_buttonNext);
-    this->Layout();
-}
-
-void CViewProductDialog::GetOrder(CWalletTx& wtx)
-{
-    wtx.SetNull();
-    for (int i = 0; i < product.vOrderForm.size(); i++)
-    {
-        string strValue;
-        if (m_textCtrlField[i])
-            strValue = m_textCtrlField[i]->GetValue().Trim();
-        else
-            strValue = m_choiceField[i]->GetStringSelection();
-        wtx.vOrderForm.push_back(make_pair(m_staticTextLabel[i]->GetLabel(), strValue));
-    }
-}
-
-void CViewProductDialog::OnButtonSubmitForm(wxCommandEvent& event)
-{
-    m_buttonSubmitForm->Enable(false);
-    m_buttonCancelForm->Enable(false);
-
-    CWalletTx wtx;
-    GetOrder(wtx);
-
-    CSendingDialog* pdialog = new CSendingDialog(this, product.addr, atoi64(product.mapValue["price"]), wtx);
-    if (!pdialog->ShowModal())
-    {
-        m_buttonSubmitForm->Enable(true);
-        m_buttonCancelForm->Enable(true);
-        return;
-    }
-}
-
-void CViewProductDialog::OnButtonCancelForm(wxCommandEvent& event)
-{
-    Destroy();
-}
-
-void CViewProductDialog::OnButtonBack(wxCommandEvent& event)
-{
-    Freeze();
-    m_htmlWinReviews->Show(true);
-    m_scrolledWindow->Show(false);
-    m_buttonBack->Enable(false);
-    m_buttonNext->Enable(!product.vOrderForm.empty());
-    this->Layout();
-    Thaw();
-}
-
-void CViewProductDialog::OnButtonNext(wxCommandEvent& event)
-{
-    if (!product.vOrderForm.empty())
-    {
-        Freeze();
-        m_htmlWinReviews->Show(false);
-        m_scrolledWindow->Show(true);
-        m_buttonBack->Enable(true);
-        m_buttonNext->Enable(false);
-        this->Layout();
-        Thaw();
-    }
-}
-
-void CViewProductDialog::OnButtonCancel(wxCommandEvent& event)
-{
-    Destroy();
-}
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// CViewOrderDialog
-//
-
-CViewOrderDialog::CViewOrderDialog(wxWindow* parent, CWalletTx order, bool fReceived) : CViewOrderDialogBase(parent)
-{
-    int64 nPrice = (fReceived ? order.GetCredit() : order.GetDebit());
-
-    string strHTML;
-    strHTML.reserve(4000);
-    strHTML += "<html>\n"
-               "<head>\n"
-               "<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">\n"
-               "</head>\n"
-               "<body>\n";
-    strHTML += "<b>Time:</b> "   + HtmlEscape(DateTimeStr(order.nTimeReceived)) + "<br>\n";
-    strHTML += "<b>Price:</b> "  + HtmlEscape(FormatMoney(nPrice)) + "<br>\n";
-    strHTML += "<b>Status:</b> " + HtmlEscape(FormatTxStatus(order)) + "<br>\n";
-
-    strHTML += "<table>\n";
-    for (int i = 0; i < order.vOrderForm.size(); i++)
-    {
-        strHTML += " <tr><td><b>" + HtmlEscape(order.vOrderForm[i].first) + ":</b></td>";
-        strHTML += "<td>" + HtmlEscape(order.vOrderForm[i].second) + "</td></tr>\n";
-    }
-    strHTML += "</table>\n";
-
-    strHTML += "</body>\n</html>\n";
-
-    // Shrink capacity to fit
-    // (strings are ref counted, so it may live on in SetPage)
-    string(strHTML.begin(), strHTML.end()).swap(strHTML);
-
-    m_htmlWin->SetPage(strHTML);
-}
-
-void CViewOrderDialog::OnButtonOK(wxCommandEvent& event)
-{
-    Destroy();
-}
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// CEditReviewDialog
-//
-
-CEditReviewDialog::CEditReviewDialog(wxWindow* parent) : CEditReviewDialogBase(parent)
-{
-}
-
-void CEditReviewDialog::OnButtonSubmit(wxCommandEvent& event)
-{
-    if (m_choiceStars->GetSelection() == -1)
-    {
-        wxMessageBox("Please select a rating  ");
-        return;
-    }
-
-    CReview review;
-    GetReview(review);
-
-    // Sign the review
-    review.vchPubKeyFrom = keyUser.GetPubKey();
-    if (!keyUser.Sign(review.GetSigHash(), review.vchSig))
-    {
-        wxMessageBox("Unable to digitally sign the review  ");
-        return;
-    }
-
-    // Broadcast
-    if (!review.AcceptReview())
-    {
-        wxMessageBox("Save failed  ");
-        return;
-    }
-    RelayMessage(CInv(MSG_REVIEW, review.GetHash()), review);
-
-    Destroy();
-}
-
-void CEditReviewDialog::OnButtonCancel(wxCommandEvent& event)
-{
-    Destroy();
-}
-
-void CEditReviewDialog::GetReview(CReview& review)
-{
-    review.mapValue["time"]   = i64tostr(GetAdjustedTime());
-    review.mapValue["stars"]  = itostr(m_choiceStars->GetSelection()+1);
-    review.mapValue["review"] = m_textCtrlReview->GetValue();
-}
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////
-//
 // CMyTaskBarIcon
 //
 
@@ -3333,11 +2438,11 @@ void CMyTaskBarIcon::Show(bool fShow)
     static char pszPrevTip[200];
     if (fShow)
     {
-        string strTooltip = "Bitcoin";
+        string strTooltip = _("Bitcoin");
         if (fGenerateBitcoins)
-            strTooltip = "Bitcoin - Generating";
+            strTooltip = _("Bitcoin - Generating");
         if (fGenerateBitcoins && vNodes.empty())
-            strTooltip = "Bitcoin - (not connected)";
+            strTooltip = _("Bitcoin - (not connected)");
 
         // Optimization, only update when changed, using char array to be reentrant
         if (strncmp(pszPrevTip, strTooltip.c_str(), sizeof(pszPrevTip)-1) != 0)
@@ -3376,14 +2481,14 @@ void CMyTaskBarIcon::OnMenuOptions(wxCommandEvent& event)
 {
     // Since it's modal, get the main window to do it
     wxCommandEvent event2(wxEVT_COMMAND_MENU_SELECTED, wxID_MENUOPTIONSOPTIONS);
-    pframeMain->AddPendingEvent(event2);
+    pframeMain->GetEventHandler()->AddPendingEvent(event2);
 }
 
 void CMyTaskBarIcon::Restore()
 {
     pframeMain->Show();
     wxIconizeEvent event(0, false);
-    pframeMain->AddPendingEvent(event);
+    pframeMain->GetEventHandler()->AddPendingEvent(event);
     pframeMain->Iconize(false);
     pframeMain->Raise();
 }
@@ -3412,12 +2517,12 @@ void CMyTaskBarIcon::UpdateTooltip()
 wxMenu* CMyTaskBarIcon::CreatePopupMenu()
 {
     wxMenu* pmenu = new wxMenu;
-    pmenu->Append(ID_TASKBAR_RESTORE, "&Open Bitcoin");
-    pmenu->Append(ID_TASKBAR_OPTIONS, "O&ptions...");
-    pmenu->AppendCheckItem(ID_TASKBAR_GENERATE, "&Generate Coins")->Check(fGenerateBitcoins);
+    pmenu->Append(ID_TASKBAR_RESTORE, _("&Open Bitcoin"));
+    pmenu->Append(ID_TASKBAR_OPTIONS, _("O&ptions..."));
+    pmenu->AppendCheckItem(ID_TASKBAR_GENERATE, _("&Generate Coins"))->Check(fGenerateBitcoins);
 #ifndef __WXMAC_OSX__ // Mac has built-in quit menu
     pmenu->AppendSeparator();
-    pmenu->Append(ID_TASKBAR_EXIT, "E&xit");
+    pmenu->Append(ID_TASKBAR_EXIT, _("E&xit"));
 #endif
     return pmenu;
 }
@@ -3439,7 +2544,9 @@ wxMenu* CMyTaskBarIcon::CreatePopupMenu()
 // Define a new application
 class CMyApp: public wxApp
 {
-  public:
+public:
+    wxLocale m_locale;
+
     CMyApp(){};
     ~CMyApp(){};
     bool OnInit();
@@ -3481,9 +2588,9 @@ bool CMyApp::OnInit()
 bool CMyApp::OnInit2()
 {
 #ifdef _MSC_VER
-    // Turn off microsoft heap dump noise for now
+    // Turn off microsoft heap dump noise
     _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_WARN, CreateFile("NUL", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, 0));
+    _CrtSetReportFile(_CRT_WARN, CreateFileA("NUL", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, 0));
 #endif
 #if defined(__WXMSW__) && defined(__WXDEBUG__)
     // Disable malfunctioning wxWidgets debug assertion
@@ -3496,40 +2603,69 @@ bool CMyApp::OnInit2()
     SetAppName("bitcoin");
     umask(077);
 #endif
+#ifdef __WXMSW__
+#if wxUSE_UNICODE
+    // Hack to set wxConvLibc codepage to UTF-8 on Windows,
+    // may break if wxMBConv_win32 implementation in strconv.cpp changes.
+    class wxMBConv_win32 : public wxMBConv
+    {
+    public:
+        long m_CodePage;
+        size_t m_minMBCharWidth;
+    };
+    if (((wxMBConv_win32*)&wxConvLibc)->m_CodePage == CP_ACP)
+        ((wxMBConv_win32*)&wxConvLibc)->m_CodePage = CP_UTF8;
+#endif
+#endif
+
+    // Load locale/<lang>/LC_MESSAGES/bitcoin.mo language file
+    m_locale.Init(wxLANGUAGE_DEFAULT, 0);
+    m_locale.AddCatalogLookupPathPrefix("locale");
+    if (!fWindows)
+    {
+        m_locale.AddCatalogLookupPathPrefix("/usr/share/locale");
+        m_locale.AddCatalogLookupPathPrefix("/usr/local/share/locale");
+    }
+    m_locale.AddCatalog("wxstd"); // wxWidgets standard translations, if any
+    m_locale.AddCatalog("bitcoin");
 
     //
     // Parameters
     //
+    if (argc > 1 && argv[1][0] != '-' && argv[1][0] != '/')
+    {
+        int ret = CommandLineRPC(argc, argv);
+        exit(ret);
+    }
+
     ParseParameters(argc, argv);
     if (mapArgs.count("-?") || mapArgs.count("--help"))
     {
-#ifdef __WXMSW__
-        string strUsage =
-            "Usage: bitcoin [options]\t\t\t\t\t\t\n"
-            "Options:\n"
-            "  -gen\t\t  Generate coins\n"
-            "  -gen=0\t\t  Don't generate coins\n"
-            "  -min\t\t  Start minimized\n"
-            "  -datadir=<dir>\t  Specify data directory\n"
-            "  -proxy=<ip:port>\t  Connect through socks4 proxy\n"
-            "  -addnode=<ip>\t  Add a node to connect to\n"
-            "  -connect=<ip>\t  Connect only to the specified node\n"
-            "  -?\t\t  This help message\n";
-        wxMessageBox(strUsage, "Bitcoin", wxOK);
-#else
-        string strUsage =
-            "Usage: bitcoin [options]\n"
-            "Options:\n"
-            "  -gen              Generate coins\n"
-            "  -gen=0            Don't generate coins\n"
-            "  -min              Start minimized\n"
-            "  -datadir=<dir>    Specify data directory\n"
-            "  -proxy=<ip:port>  Connect through socks4 proxy\n"
-            "  -addnode=<ip>     Add a node to connect to\n"
-            "  -connect=<ip>     Connect only to the specified node\n"
-            "  -?                This help message\n";
-        fprintf(stderr, "%s", strUsage.c_str());
-#endif
+        wxString strUsage = string() +
+            _("Usage: bitcoin [options]") + "\t\t\t\t\t\t\n" +
+            _("Options:\n") +
+            "  -gen            \t\t   " + _("Generate coins\n") +
+            "  -gen=0          \t\t   " + _("Don't generate coins\n") +
+            "  -min            \t\t   " + _("Start minimized\n") +
+            "  -datadir=<dir>  \t   "   + _("Specify data directory\n") +
+            "  -proxy=<ip:port>\t   "   + _("Connect through socks4 proxy\n") +
+            "  -addnode=<ip>   \t   "   + _("Add a node to connect to\n") +
+            "  -connect=<ip>   \t   "   + _("Connect only to the specified node\n") +
+            "  -?              \t\t   " + _("This help message\n");
+
+        if (fWindows)
+        {
+            // Remove spaces, the tabs make the columns line up in the message box
+            for (int i = 0; i < 50; i++)
+                strUsage.Replace(" \t", "\t");
+            wxMessageBox(strUsage, "Bitcoin", wxOK);
+        }
+        else
+        {
+            // Remove tabs
+            strUsage.Replace("\t", "");
+            fprintf(stderr, "%s", ((string)strUsage).c_str());
+        }
         return false;
     }
 
@@ -3542,10 +2678,19 @@ bool CMyApp::OnInit2()
     if (mapArgs.count("-printtodebugger"))
         fPrintToDebugger = true;
 
+    if (mapArgs.count("-daemon") || mapArgs.count("-d"))
+    {
+        fDaemon = true;
+        /// todo: need to fork
+        ///  should it fork after the bind/single instance stuff?
+    }
+
     if (!fDebug && !pszSetDataDir[0])
         ShrinkDebugFile();
     printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
-    printf("Bitcoin version %d%s, OS version %s\n", VERSION, pszSubVer, wxGetOsDescription().mb_str());
+    printf("Bitcoin version 0.%d.%d%s beta, OS version %s\n", VERSION/100, VERSION%100, pszSubVer, ((string)wxGetOsDescription()).c_str());
+    printf("System default language is %d %s\n", m_locale.GetSystemLanguage(), ((string)m_locale.GetSysName()).c_str());
+    printf("Language file %s (%s)\n", (string("locale/") + (string)m_locale.GetCanonicalName() + "/LC_MESSAGES/bitcoin.mo").c_str(), ((string)m_locale.GetLocale()).c_str());
 
     if (mapArgs.count("-loadblockindextest"))
     {
@@ -3575,7 +2720,7 @@ bool CMyApp::OnInit2()
         {
             // TODO: find out how to do this in Linux, or replace with wxWidgets commands
             // Show the previous instance and exit
-            HWND hwndPrev = FindWindow("wxWindowClassNR", "Bitcoin");
+            HWND hwndPrev = FindWindowA("wxWindowClassNR", "Bitcoin");
             if (hwndPrev)
             {
                 if (IsIconic(hwndPrev))
@@ -3616,19 +2761,19 @@ bool CMyApp::OnInit2()
     printf("Loading addresses...\n");
     nStart = GetTimeMillis();
     if (!LoadAddresses())
-        strErrors += "Error loading addr.dat      \n";
+        strErrors += _("Error loading addr.dat      \n");
     printf(" addresses   %15"PRI64d"ms\n", GetTimeMillis() - nStart);
 
     printf("Loading block index...\n");
     nStart = GetTimeMillis();
     if (!LoadBlockIndex())
-        strErrors += "Error loading blkindex.dat      \n";
+        strErrors += _("Error loading blkindex.dat      \n");
     printf(" block index %15"PRI64d"ms\n", GetTimeMillis() - nStart);
 
     printf("Loading wallet...\n");
     nStart = GetTimeMillis();
     if (!LoadWallet(fFirstRun))
-        strErrors += "Error loading wallet.dat      \n";
+        strErrors += _("Error loading wallet.dat      \n");
     printf(" wallet      %15"PRI64d"ms\n", GetTimeMillis() - nStart);
 
     printf("Done loading\n");
@@ -3696,36 +2841,38 @@ bool CMyApp::OnInit2()
         addrProxy = CAddress(mapArgs["-proxy"]);
         if (!addrProxy.IsValid())
         {
-            wxMessageBox("Invalid -proxy address", "Bitcoin");
+            wxMessageBox(_("Invalid -proxy address"), "Bitcoin");
             return false;
         }
     }
 
     if (mapArgs.count("-addnode"))
     {
-        CAddrDB addrdb;
         foreach(string strAddr, mapMultiArgs["-addnode"])
         {
             CAddress addr(strAddr, NODE_NETWORK);
             addr.nTime = 0; // so it won't relay unless successfully connected
             if (addr.IsValid())
-                AddAddress(addrdb, addr);
+                AddAddress(addr);
         }
     }
 
     //
     // Create the main frame window
     //
-    pframeMain = new CMainFrame(NULL);
-    if (mapArgs.count("-min"))
-        pframeMain->Iconize(true);
-    pframeMain->Show(true);  // have to show first to get taskbar button to hide
-    if (fMinimizeToTray && pframeMain->IsIconized())
-        fClosedToTray = true;
-    pframeMain->Show(!fClosedToTray);
-    ptaskbaricon->Show(fMinimizeToTray || fClosedToTray);
+    if (!fDaemon)
+    {
+        pframeMain = new CMainFrame(NULL);
+        if (mapArgs.count("-min"))
+            pframeMain->Iconize(true);
+        pframeMain->Show(true);  // have to show first to get taskbar button to hide
+        if (fMinimizeToTray && pframeMain->IsIconized())
+            fClosedToTray = true;
+        pframeMain->Show(!fClosedToTray);
+        ptaskbaricon->Show(fMinimizeToTray || fClosedToTray);
 
-    CreateThread(ThreadDelayedRepaint, NULL);
+        CreateThread(ThreadDelayedRepaint, NULL);
+    }
 
     if (!CheckDiskSpace())
         return false;
@@ -3734,6 +2881,9 @@ bool CMyApp::OnInit2()
 
     if (!CreateThread(StartNode, NULL))
         wxMessageBox("Error: CreateThread(StartNode) failed", "Bitcoin");
+
+    if (mapArgs.count("-server") || fDaemon)
+        CreateThread(ThreadRPCServer, NULL);
 
     if (fFirstRun)
         SetStartOnSystemStartup(true);
@@ -3826,7 +2976,7 @@ void CMyApp::OnUnhandledException()
 
 void CMyApp::OnFatalException()
 {
-    wxMessageBox("Program has crashed and will terminate.  ", "Bitcoin", wxOK | wxICON_ERROR);
+    wxMessageBox(_("Program has crashed and will terminate.  "), "Bitcoin", wxOK | wxICON_ERROR);
 }
 
 
@@ -3841,7 +2991,7 @@ string MyGetSpecialFolderPath(int nFolder, bool fCreate)
     char pszPath[MAX_PATH+100] = "";
 
     // SHGetSpecialFolderPath is not usually available on NT 4.0
-    HMODULE hShell32 = LoadLibrary("shell32.dll");
+    HMODULE hShell32 = LoadLibraryA("shell32.dll");
     if (hShell32)
     {
         PSHGETSPECIALFOLDERPATHA pSHGetSpecialFolderPath =
@@ -3896,7 +3046,7 @@ void SetStartOnSystemStartup(bool fAutoStart)
         if (SUCCEEDED(hres))
         {
             // Get the current executable path
-            char pszExePath[MAX_PATH];
+            TCHAR pszExePath[MAX_PATH];
             GetModuleFileName(NULL, pszExePath, sizeof(pszExePath));
 
             // Set the path to the shortcut target

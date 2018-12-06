@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -223,7 +223,7 @@ bool GetMyExternalIP(unsigned int& ipRet)
 
 
 
-bool AddAddress(CAddrDB& addrdb, CAddress addr, bool fCurrentlyOnline)
+bool AddAddress(CAddress addr, bool fCurrentlyOnline)
 {
     if (!addr.IsRoutable())
         return false;
@@ -239,7 +239,7 @@ bool AddAddress(CAddrDB& addrdb, CAddress addr, bool fCurrentlyOnline)
             // New address
             printf("AddAddress(%s)\n", addr.ToStringLog().c_str());
             mapAddresses.insert(make_pair(addr.GetKey(), addr));
-            addrdb.WriteAddress(addr);
+            CAddrDB().WriteAddress(addr);
             return true;
         }
         else
@@ -260,7 +260,7 @@ bool AddAddress(CAddrDB& addrdb, CAddress addr, bool fCurrentlyOnline)
                 fUpdated = true;
             }
             if (fUpdated)
-                addrdb.WriteAddress(addrFound);
+                CAddrDB().WriteAddress(addrFound);
         }
     }
     return false;
@@ -381,11 +381,6 @@ void CNode::CancelSubscribe(unsigned int nChannel)
             foreach(CNode* pnode, vNodes)
                 if (pnode != this)
                     pnode->PushMessage("sub-cancel", nChannel);
-
-        // Clear memory, no longer subscribed
-        if (nChannel == MSG_PRODUCT)
-            CRITICAL_BLOCK(cs_mapProducts)
-                mapProducts.clear();
     }
 }
 
@@ -497,10 +492,6 @@ void CNode::Cleanup()
     // All of a nodes broadcasts and subscriptions are automatically torn down
     // when it goes down, so a node has to stay up to keep its broadcast going.
 
-    CRITICAL_BLOCK(cs_mapProducts)
-        for (map<uint256, CProduct>::iterator mi = mapProducts.begin(); mi != mapProducts.end();)
-            AdvertRemoveSource(this, MSG_PRODUCT, 0, (*(mi++)).second);
-
     // Cancel subscriptions
     for (unsigned int nChannel = 0; nChannel < vfSubscribe.size(); nChannel++)
         if (vfSubscribe[nChannel])
@@ -522,7 +513,6 @@ void CNode::Cleanup()
 void ThreadSocketHandler(void* parg)
 {
     IMPLEMENT_RANDOMIZE_STACK(ThreadSocketHandler(parg));
-
     try
     {
         vnThreadsRunning[0]++;
@@ -536,7 +526,6 @@ void ThreadSocketHandler(void* parg)
         vnThreadsRunning[0]--;
         throw; // support pthread_cancel()
     }
-
     printf("ThreadSocketHandler exiting\n");
 }
 
@@ -657,11 +646,7 @@ void ThreadSocketHandler2(void* parg)
         if (FD_ISSET(hListenSocket, &fdsetRecv))
         {
             struct sockaddr_in sockaddr;
-#ifdef __WXMSW__
-            int len = sizeof(sockaddr);
-#else
             socklen_t len = sizeof(sockaddr);
-#endif
             SOCKET hSocket = accept(hListenSocket, (struct sockaddr*)&sockaddr, &len);
             CAddress addr(sockaddr);
             if (hSocket == INVALID_SOCKET)
@@ -816,7 +801,6 @@ void ThreadSocketHandler2(void* parg)
 void ThreadOpenConnections(void* parg)
 {
     IMPLEMENT_RANDOMIZE_STACK(ThreadOpenConnections(parg));
-
     try
     {
         vnThreadsRunning[1]++;
@@ -830,7 +814,6 @@ void ThreadOpenConnections(void* parg)
         vnThreadsRunning[1]--;
         PrintException(NULL, "ThreadOpenConnections()");
     }
-
     printf("ThreadOpenConnections exiting\n");
 }
 
@@ -881,11 +864,11 @@ void ThreadOpenConnections2(void* parg)
         vnThreadsRunning[1]--;
         Sleep(500);
         const int nMaxConnections = 15;
-        while (vNodes.size() >= nMaxConnections || vNodes.size() >= mapAddresses.size())
+        while (vNodes.size() >= nMaxConnections)
         {
+            Sleep(2000);
             if (fShutdown)
                 return;
-            Sleep(2000);
         }
         vnThreadsRunning[1]++;
         if (fShutdown)
@@ -928,7 +911,7 @@ void ThreadOpenConnections2(void* parg)
                 //   30 days   27 hours
                 //   90 days   46 hours
                 //  365 days   93 hours
-                int64 nDelay = (int64)(3600.0 * sqrt(fabs(nSinceLastSeen) / 3600.0) + nRandomizer);
+                int64 nDelay = (int64)(3600.0 * sqrt(fabs((double)nSinceLastSeen) / 3600.0) + nRandomizer);
 
                 // Fast reconnect for one hour after last seen
                 if (nSinceLastSeen < 60 * 60)
@@ -1016,7 +999,6 @@ bool OpenNetworkConnection(const CAddress& addrConnect)
 void ThreadMessageHandler(void* parg)
 {
     IMPLEMENT_RANDOMIZE_STACK(ThreadMessageHandler(parg));
-
     try
     {
         vnThreadsRunning[2]++;
@@ -1030,7 +1012,6 @@ void ThreadMessageHandler(void* parg)
         vnThreadsRunning[2]--;
         PrintException(NULL, "ThreadMessageHandler()");
     }
-
     printf("ThreadMessageHandler exiting\n");
 }
 
@@ -1038,7 +1019,7 @@ void ThreadMessageHandler2(void* parg)
 {
     printf("ThreadMessageHandler started\n");
     SetThreadPriority(THREAD_PRIORITY_BELOW_NORMAL);
-    loop
+    while (!fShutdown)
     {
         // Poll the connected nodes for messages
         vector<CNode*> vNodesCopy;
@@ -1329,7 +1310,7 @@ bool StopNode()
     fShutdown = true;
     nTransactionsUpdated++;
     int64 nStart = GetTime();
-    while (vnThreadsRunning[0] > 0 || vnThreadsRunning[2] > 0 || vnThreadsRunning[3] > 0)
+    while (vnThreadsRunning[0] > 0 || vnThreadsRunning[2] > 0 || vnThreadsRunning[3] > 0 || vnThreadsRunning[4] > 0)
     {
         if (GetTime() - nStart > 20)
             break;
@@ -1339,7 +1320,8 @@ bool StopNode()
     if (vnThreadsRunning[1] > 0) printf("ThreadOpenConnections still running\n");
     if (vnThreadsRunning[2] > 0) printf("ThreadMessageHandler still running\n");
     if (vnThreadsRunning[3] > 0) printf("ThreadBitcoinMiner still running\n");
-    while (vnThreadsRunning[2] > 0)
+    if (vnThreadsRunning[4] > 0) printf("ThreadRPCServer still running\n");
+    while (vnThreadsRunning[2] > 0 || vnThreadsRunning[4] > 0)
         Sleep(20);
     Sleep(50);
 

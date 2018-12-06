@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -23,7 +23,7 @@ enum
 
 bool ConnectSocket(const CAddress& addrConnect, SOCKET& hSocketRet);
 bool GetMyExternalIP(unsigned int& ipRet);
-bool AddAddress(CAddrDB& addrdb, CAddress addr, bool fCurrentlyOnline=true);
+bool AddAddress(CAddress addr, bool fCurrentlyOnline=true);
 void AddressCurrentlyConnected(const CAddress& addr);
 CNode* FindNode(unsigned int ip);
 CNode* ConnectNode(CAddress addrConnect, int64 nTimeout=0);
@@ -341,9 +341,6 @@ enum
 {
     MSG_TX = 1,
     MSG_BLOCK,
-    MSG_REVIEW,
-    MSG_PRODUCT,
-    MSG_TABLE,
 };
 
 static const char* ppszTypeName[] =
@@ -351,9 +348,6 @@ static const char* ppszTypeName[] =
     "ERROR",
     "tx",
     "block",
-    "review",
-    "product",
-    "table",
 };
 
 class CInv
@@ -518,6 +512,7 @@ public:
     vector<CInv> vInventoryToSend;
     CCriticalSection cs_inventory;
     multimap<int64, CInv> mapAskFor;
+    int64 nLastSentTxInv;
 
     // publish and subscription
     vector<char> vfSubscribe;
@@ -627,7 +622,7 @@ public:
         // We're using mapAskFor as a priority queue,
         // the key is the earliest time the request can be sent
         int64& nRequestTime = mapAlreadyAskedFor[inv];
-        printf("askfor %s  %"PRI64d"\n", inv.ToString().c_str(), nRequestTime);
+        printf("askfor %s   %"PRI64d"\n", inv.ToString().c_str(), nRequestTime);
 
         // Make sure not to reuse time indexes to keep things in the same order
         int64 nNow = (GetTime() - 1) * 1000000;

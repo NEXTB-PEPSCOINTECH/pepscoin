@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -134,8 +134,6 @@ void CDB::Close()
 
     CRITICAL_BLOCK(cs_db)
         --mapFileUseCount[strFile];
-
-    RandAddSeed();
 }
 
 void CloseDb(const string& strFile)
@@ -456,7 +454,7 @@ bool CAddrDB::LoadAddresses()
                     CAddress addr(psz, NODE_NETWORK);
                     addr.nTime = 0; // so it won't relay unless successfully connected
                     if (addr.IsValid())
-                        AddAddress(*this, addr);
+                        AddAddress(addr);
                 }
             }
             catch (...) { }
@@ -505,27 +503,6 @@ bool LoadAddresses()
 {
     return CAddrDB("cr+").LoadAddresses();
 }
-
-
-
-
-//
-// CReviewDB
-//
-
-bool CReviewDB::ReadReviews(uint256 hash, vector<CReview>& vReviews)
-{
-    vReviews.size(); // msvc workaround, just need to do anything with vReviews
-    return Read(make_pair(string("reviews"), hash), vReviews);
-}
-
-bool CReviewDB::WriteReviews(uint256 hash, const vector<CReview>& vReviews)
-{
-    return Write(make_pair(string("reviews"), hash), vReviews);
-}
-
-
-
 
 
 
@@ -595,14 +572,17 @@ bool CWalletDB::LoadWallet(vector<unsigned char>& vchDefaultKeyRet)
                 //    wtx.hashBlock.ToString().substr(0,16).c_str(),
                 //    wtx.mapValue["message"].c_str());
             }
-            else if (strType == "key")
+            else if (strType == "key" || strType == "wkey")
             {
                 vector<unsigned char> vchPubKey;
                 ssKey >> vchPubKey;
-                CPrivKey vchPrivKey;
-                ssValue >> vchPrivKey;
+                CWalletKey wkey;
+                if (strType == "key")
+                    ssValue >> wkey.vchPrivKey;
+                else
+                    ssValue >> wkey;
 
-                mapKeys[vchPubKey] = vchPrivKey;
+                mapKeys[vchPubKey] = wkey.vchPrivKey;
                 mapPubKeys[Hash160(vchPubKey)] = vchPubKey;
             }
             else if (strType == "defaultkey")

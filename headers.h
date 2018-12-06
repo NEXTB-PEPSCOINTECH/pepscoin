@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -29,15 +29,15 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
+#include <db_cxx.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <limits.h>
 #include <float.h>
 #include <assert.h>
-#include <malloc.h>
 #include <memory>
-#define BOUNDSCHECK 1
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -55,6 +55,8 @@
 #include <boost/array.hpp>
 #include <boost/bind.hpp>
 #include <boost/function.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/algorithm/string.hpp>
 
 #ifdef __WXMSW__
 #include <windows.h>
@@ -64,6 +66,7 @@
 #include <shlwapi.h>
 #include <io.h>
 #include <process.h>
+#include <malloc.h>
 #else
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -74,15 +77,15 @@
 #include <errno.h>
 #include <net/if.h>
 #include <ifaddrs.h>
-#include <boost/filesystem.hpp>
-#include <boost/algorithm/string.hpp>
 #endif
+#ifdef __BSD__
+#include <netinet/in.h>
+#endif
+
 
 #pragma hdrstop
 using namespace std;
 using namespace boost;
-
-
 
 #include "strlcpy.h"
 #include "serialize.h"
@@ -96,7 +99,7 @@ using namespace boost;
 #include "net.h"
 #include "irc.h"
 #include "main.h"
-#include "market.h"
+#include "rpc.h"
 #include "uibase.h"
 #include "ui.h"
 
@@ -110,3 +113,4 @@ using namespace boost;
 #include "xpm/send16.xpm"
 #include "xpm/send16noshadow.xpm"
 #include "xpm/send20.xpm"
+#include "xpm/about.xpm"

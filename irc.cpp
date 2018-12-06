@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -265,8 +265,7 @@ void ThreadIRCSeed(void* parg)
                 if (DecodeAddress(pszName, addr))
                 {
                     addr.nTime = GetAdjustedTime() - 51 * 60;
-                    CAddrDB addrdb;
-                    if (AddAddress(addrdb, addr))
+                    if (AddAddress(addr))
                         printf("IRC got new address\n");
                     nGotIRCAddresses++;
                 }

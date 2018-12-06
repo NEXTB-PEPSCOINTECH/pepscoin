@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -19,8 +19,8 @@ class CScript;
 class CDataStream;
 class CAutoFile;
 
-static const int VERSION = 200;
-static const char* pszSubVer = " rc2";
+static const int VERSION = 202;
+static const char* pszSubVer = ".0";
 
 
 
@@ -194,28 +194,32 @@ uint64 ReadCompactSize(Stream& is)
 {
     unsigned char chSize;
     READDATA(is, chSize);
+    uint64 nSizeRet = 0;
     if (chSize < UCHAR_MAX-2)
     {
-        return chSize;
+        nSizeRet = chSize;
     }
     else if (chSize == UCHAR_MAX-2)
     {
         unsigned short nSize;
         READDATA(is, nSize);
-        return nSize;
+        nSizeRet = nSize;
     }
     else if (chSize == UCHAR_MAX-1)
     {
         unsigned int nSize;
         READDATA(is, nSize);
-        return nSize;
+        nSizeRet = nSize;
     }
     else
     {
         uint64 nSize;
         READDATA(is, nSize);
-        return nSize;
+        nSizeRet = nSize;
     }
+    if (nSizeRet > (uint64)INT_MAX)
+        throw std::ios_base::failure("ReadCompactSize() : size too large");
+    return nSizeRet;
 }
 
 
@@ -460,7 +464,7 @@ void Unserialize_impl(Stream& is, std::vector<T, A>& v, int nType, int nVersion,
     unsigned int i = 0;
     while (i < nSize)
     {
-        unsigned int blk = min(nSize - i, 1 + 4999999 / sizeof(T));
+        unsigned int blk = min(nSize - i, (unsigned int)(1 + 4999999 / sizeof(T)));
         v.resize(i + blk);
         is.read((char*)&v[i], blk * sizeof(T));
         i += blk;

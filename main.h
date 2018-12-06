@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -36,6 +36,8 @@ extern CBlockIndex* pindexBest;
 extern unsigned int nTransactionsUpdated;
 extern map<uint256, int> mapRequestCount;
 extern CCriticalSection cs_mapRequestCount;
+extern map<string, string> mapAddressBook;
+extern CCriticalSection cs_mapAddressBook;
 
 // Settings
 extern int fGenerateBitcoins;
@@ -56,8 +58,8 @@ FILE* AppendBlockFile(unsigned int& nFileRet);
 bool AddKey(const CKey& key);
 vector<unsigned char> GenerateNewKey();
 bool AddToWallet(const CWalletTx& wtxIn);
+void WalletUpdateSpent(const COutPoint& prevout);
 void ReacceptWalletTransactions();
-void RelayWalletTransactions();
 bool LoadBlockIndex(bool fAllowNew=true);
 void PrintBlockTree();
 bool ProcessMessages(CNode* pfrom);
@@ -66,7 +68,8 @@ bool SendMessages(CNode* pto);
 int64 GetBalance();
 bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CKey& keyRet, int64& nFeeRequiredRet);
 bool CommitTransactionSpent(const CWalletTx& wtxNew, const CKey& key);
-bool SendMoney(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew);
+string SendMoney(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew);
+string SendMoneyToBitcoinAddress(string strAddress, int64 nValue, CWalletTx& wtxNew);
 void GenerateBitcoins(bool fGenerate);
 void ThreadBitcoinMiner(void* parg);
 void BitcoinMiner();
@@ -679,7 +682,8 @@ public:
 
 
     int SetMerkleBranch(const CBlock* pblock=NULL);
-    int GetDepthInMainChain() const;
+    int GetDepthInMainChain(int& nHeightRet) const;
+    int GetDepthInMainChain() const { int nHeight; return GetDepthInMainChain(nHeight); }
     bool IsInMainChain() const { return GetDepthInMainChain() > 0; }
     int GetBlocksToMaturity() const;
     bool AcceptTransaction(CTxDB& txdb, bool fCheckInputs=true);
@@ -1370,6 +1374,31 @@ public:
 
 
 
+//
+// Private key that includes an expiration date in case it never gets used.
+//
+class CWalletKey
+{
+public:
+    CPrivKey vchPrivKey;
+    int64 nTimeCreated;
+    int64 nTimeExpires;
+
+    CWalletKey(int64 nTimeExpiresIn=0)
+    {
+        nTimeCreated = (nTimeExpiresIn ? GetTime() : 0);
+        nTimeExpires = nTimeExpiresIn;
+    }
+
+    IMPLEMENT_SERIALIZE
+    (
+        if (!(nType & SER_GETHASH))
+            READWRITE(nVersion);
+        READWRITE(vchPrivKey);
+        READWRITE(nTimeCreated);
+        READWRITE(nTimeExpires);
+    )
+};
 
 
 

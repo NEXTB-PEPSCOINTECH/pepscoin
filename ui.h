@@ -1,4 +1,4 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
@@ -6,12 +6,6 @@
 
 
 DECLARE_EVENT_TYPE(wxEVT_UITHREADCALL, -1)
-DECLARE_EVENT_TYPE(wxEVT_REPLY1, -1)
-DECLARE_EVENT_TYPE(wxEVT_REPLY2, -1)
-DECLARE_EVENT_TYPE(wxEVT_REPLY3, -1)
-
-
-
 
 extern map<string, string> mapArgs;
 
@@ -22,12 +16,12 @@ extern int fMinimizeOnClose;
 
 
 
-extern void HandleCtrlA(wxKeyEvent& event);
-extern string FormatTxStatus(const CWalletTx& wtx);
-extern void UIThreadCall(boost::function0<void>);
-extern void MainFrameRepaint();
-extern void Shutdown(void* parg);
-extern int ThreadSafeMessageBox(const string& message, const string& caption="Message", int style=wxOK, wxWindow* parent=NULL, int x=-1, int y=-1);
+void HandleCtrlA(wxKeyEvent& event);
+string FormatTxStatus(const CWalletTx& wtx);
+void UIThreadCall(boost::function0<void>);
+void MainFrameRepaint();
+void Shutdown(void* parg);
+int ThreadSafeMessageBox(const string& message, const string& caption="Message", int style=wxOK, wxWindow* parent=NULL, int x=-1, int y=-1);
 
 
 
@@ -57,10 +51,10 @@ protected:
     void OnButtonAddressBook(wxCommandEvent& event);
     void OnSetFocusAddress(wxFocusEvent& event);
     void OnMouseEventsAddress(wxMouseEvent& event);
-    void OnButtonCopy(wxCommandEvent& event);
     void OnButtonChange(wxCommandEvent& event);
+    void OnButtonCopy(wxCommandEvent& event);
     void OnListColBeginDrag(wxListEvent& event);
-    void OnListItemActivatedAllTransactions(wxListEvent& event);
+    void OnListItemActivated(wxListEvent& event);
     void OnListItemActivatedProductsSent(wxListEvent& event);
     void OnListItemActivatedOrdersSent(wxListEvent& event);
     void OnListItemActivatedOrdersReceived(wxListEvent& event);
@@ -263,138 +257,6 @@ public:
 
 
 
-class CProductsDialog : public CProductsDialogBase
-{
-protected:
-    // Event handlers
-    void OnKeyDown(wxKeyEvent& event) { HandleCtrlA(event); }
-    void OnCombobox(wxCommandEvent& event);
-    void OnButtonSearch(wxCommandEvent& event);
-    void OnListItemActivated(wxListEvent& event);
-
-public:
-    /** Constructor */
-    CProductsDialog(wxWindow* parent);
-
-    // Custom
-    vector<CProduct> m_vProduct;
-};
-
-
-
-class CEditProductDialog : public CEditProductDialogBase
-{
-protected:
-    // Event handlers
-    void OnKeyDown(wxKeyEvent& event) { HandleCtrlA(event); }
-    void OnButtonDel0(wxCommandEvent& event);
-    void OnButtonDel1(wxCommandEvent& event);
-    void OnButtonDel2(wxCommandEvent& event);
-    void OnButtonDel3(wxCommandEvent& event);
-    void OnButtonDel4(wxCommandEvent& event);
-    void OnButtonDel5(wxCommandEvent& event);
-    void OnButtonDel6(wxCommandEvent& event);
-    void OnButtonDel7(wxCommandEvent& event);
-    void OnButtonDel8(wxCommandEvent& event);
-    void OnButtonDel9(wxCommandEvent& event);
-    void OnButtonDel10(wxCommandEvent& event);
-    void OnButtonDel11(wxCommandEvent& event);
-    void OnButtonDel12(wxCommandEvent& event);
-    void OnButtonDel13(wxCommandEvent& event);
-    void OnButtonDel14(wxCommandEvent& event);
-    void OnButtonDel15(wxCommandEvent& event);
-    void OnButtonDel16(wxCommandEvent& event);
-    void OnButtonDel17(wxCommandEvent& event);
-    void OnButtonDel18(wxCommandEvent& event);
-    void OnButtonDel19(wxCommandEvent& event);
-    void OnButtonAddField(wxCommandEvent& event);
-    void OnButtonSend(wxCommandEvent& event);
-    void OnButtonPreview(wxCommandEvent& event);
-    void OnButtonCancel(wxCommandEvent& event);
-
-public:
-    /** Constructor */
-    CEditProductDialog(wxWindow* parent);
-
-    // Custom
-    enum { FIELDS_MAX = 20 };
-    wxTextCtrl* m_textCtrlLabel[FIELDS_MAX];
-    wxTextCtrl* m_textCtrlField[FIELDS_MAX];
-    wxButton*   m_buttonDel[FIELDS_MAX];
-
-    void LayoutAll();
-    void ShowLine(int i, bool fShow=true);
-    void OnButtonDel(wxCommandEvent& event, int n);
-    void SetProduct(const CProduct& productIn);
-    void GetProduct(CProduct& product);
-
-};
-
-
-
-class CViewProductDialog : public CViewProductDialogBase
-{
-protected:
-    // Event handlers
-    void OnButtonSubmitForm(wxCommandEvent& event);
-    void OnButtonCancelForm(wxCommandEvent& event);
-    void OnButtonBack(wxCommandEvent& event);
-    void OnButtonNext(wxCommandEvent& event);
-    void OnButtonCancel(wxCommandEvent& event);
-
-public:
-    /** Constructor */
-    CViewProductDialog(wxWindow* parent, const CProduct& productIn);
-    ~CViewProductDialog();
-
-    // Custom
-    CProduct product;
-    enum { FIELDS_MAX = 20 };
-    wxStaticText* m_staticTextLabel[FIELDS_MAX];
-    wxTextCtrl*   m_textCtrlField[FIELDS_MAX];
-    wxChoice*     m_choiceField[FIELDS_MAX];
-
-    void GetOrder(CWalletTx& order);
-    void UpdateProductDisplay(bool fDetails);
-    void OnReply1(wxCommandEvent& event);
-};
-
-
-
-class CViewOrderDialog : public CViewOrderDialogBase
-{
-protected:
-    // Event handlers
-    void OnButtonOK(wxCommandEvent& event);
-
-public:
-    /** Constructor */
-    CViewOrderDialog(wxWindow* parent, CWalletTx order, bool fReceived);
-
-    // Custom
-    bool fReceived;
-};
-
-
-
-class CEditReviewDialog : public CEditReviewDialogBase
-{
-protected:
-    // Event handlers
-    void OnKeyDown(wxKeyEvent& event) { HandleCtrlA(event); }
-    void OnButtonSubmit(wxCommandEvent& event);
-    void OnButtonCancel(wxCommandEvent& event);
-
-public:
-    /** Constructor */
-    CEditReviewDialog(wxWindow* parent);
-
-    // Custom
-    void GetReview(CReview& review);
-};
-
-
-
 class CGetTextFromUserDialog : public CGetTextFromUserDialogBase
 {
 protected:
@@ -430,6 +292,8 @@ public:
             m_textCtrl2->SetValue(strValue2);
             SetSize(wxDefaultCoord, 180);
         }
+        if (!fWindows)
+            SetSize(1.14 * GetSize().GetWidth(), 1.14 * GetSize().GetHeight());
     }
 
     // Custom

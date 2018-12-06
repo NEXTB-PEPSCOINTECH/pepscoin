@@ -1,8 +1,7 @@
-// Copyright (c) 2009 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
-#include <db_cxx.h>
 class CTransaction;
 class CTxIndex;
 class CDiskBlockIndex;
@@ -14,6 +13,7 @@ class CAddress;
 class CWalletTx;
 
 extern map<string, string> mapAddressBook;
+extern CCriticalSection cs_mapAddressBook;
 extern bool fClient;
 
 
@@ -285,45 +285,6 @@ public:
 
 
 
-class CReviewDB : public CDB
-{
-public:
-    CReviewDB(const char* pszMode="r+") : CDB("reviews.dat", pszMode) { }
-private:
-    CReviewDB(const CReviewDB&);
-    void operator=(const CReviewDB&);
-public:
-    bool ReadUser(uint256 hash, CUser& user)
-    {
-        return Read(make_pair(string("user"), hash), user);
-    }
-
-    bool WriteUser(uint256 hash, const CUser& user)
-    {
-        return Write(make_pair(string("user"), hash), user);
-    }
-
-    bool ReadReviews(uint256 hash, vector<CReview>& vReviews);
-    bool WriteReviews(uint256 hash, const vector<CReview>& vReviews);
-};
-
-
-
-
-
-class CMarketDB : public CDB
-{
-public:
-    CMarketDB(const char* pszMode="r+") : CDB("market.dat", pszMode) { }
-private:
-    CMarketDB(const CMarketDB&);
-    void operator=(const CMarketDB&);
-};
-
-
-
-
-
 class CAddrDB : public CDB
 {
 public:
@@ -359,15 +320,17 @@ public:
 
     bool WriteName(const string& strAddress, const string& strName)
     {
+        CRITICAL_BLOCK(cs_mapAddressBook)
+            mapAddressBook[strAddress] = strName;
         nWalletDBUpdated++;
-        mapAddressBook[strAddress] = strName;
         return Write(make_pair(string("name"), strAddress), strName);
     }
 
     bool EraseName(const string& strAddress)
     {
+        CRITICAL_BLOCK(cs_mapAddressBook)
+            mapAddressBook.erase(strAddress);
         nWalletDBUpdated++;
-        mapAddressBook.erase(strAddress);
         return Erase(make_pair(string("name"), strAddress));
     }
 
