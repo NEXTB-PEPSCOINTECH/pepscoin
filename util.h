@@ -54,8 +54,21 @@ inline T& REF(const T& val)
     return (T&)val;
 }
 
+// Align by increasing pointer, must have extra space at end of buffer
+template <size_t nBytes, typename T>
+T* alignup(T* p)
+{
+    union
+    {
+        T* ptr;
+        size_t n;
+    } u;
+    u.ptr = p;
+    u.n = (u.n + (nBytes-1)) & ~(nBytes-1);
+    return u.ptr;
+}
+
 #ifdef __WXMSW__
-static const bool fWindows = true;
 #define MSG_NOSIGNAL        0
 #define MSG_DONTWAIT        0
 #ifndef UINT64_MAX
@@ -70,7 +83,6 @@ static const bool fWindows = true;
 #define unlink              _unlink
 typedef int socklen_t;
 #else
-static const bool fWindows = false;
 #define WSAGetLastError()   errno
 #define WSAEWOULDBLOCK      EWOULDBLOCK
 #define WSAEMSGSIZE         EMSGSIZE
@@ -84,10 +96,12 @@ typedef u_int SOCKET;
 #define _vsnprintf(a,b,c,d) vsnprintf(a,b,c,d)
 #define strlwr(psz)         to_lower(psz)
 #define _strlwr(psz)        to_lower(psz)
-#define _mkdir(psz)         filesystem::create_directory(psz)
 #define MAX_PATH            1024
-#define Sleep(n)            wxMilliSleep(n)
 #define Beep(n1,n2)         (0)
+inline void Sleep(int64 n)
+{
+    boost::thread::sleep(boost::get_system_time() + boost::posix_time::milliseconds(n));
+}
 #endif
 
 inline int myclosesocket(SOCKET& hSocket)
@@ -103,6 +117,13 @@ inline int myclosesocket(SOCKET& hSocket)
     return ret;
 }
 #define closesocket(s)      myclosesocket(s)
+
+#ifndef GUI
+inline const char* _(const char* psz)
+{
+    return psz;
+}
+#endif
 
 
 

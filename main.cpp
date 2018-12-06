@@ -3,7 +3,7 @@
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
 #include "headers.h"
-#include "sha.h"
+#include "cryptopp/sha.h"
 
 
 
@@ -83,6 +83,7 @@ bool AddKey(const CKey& key)
 
 vector<unsigned char> GenerateNewKey()
 {
+    RandAddSeedPerfmon();
     CKey key;
     key.MakeNewKey();
     if (!AddKey(key))
@@ -805,9 +806,9 @@ int64 CBlock::GetBlockValue(int64 nFees) const
 
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast)
 {
-    const unsigned int nTargetTimespan = 14 * 24 * 60 * 60; // two weeks
-    const unsigned int nTargetSpacing = 10 * 60;
-    const unsigned int nInterval = nTargetTimespan / nTargetSpacing;
+    const int64 nTargetTimespan = 14 * 24 * 60 * 60; // two weeks
+    const int64 nTargetSpacing = 10 * 60;
+    const int64 nInterval = nTargetTimespan / nTargetSpacing;
 
     // Genesis block
     if (pindexLast == NULL)
@@ -824,8 +825,8 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast)
     assert(pindexFirst);
 
     // Limit adjustment step
-    unsigned int nActualTimespan = pindexLast->nTime - pindexFirst->nTime;
-    printf("  nActualTimespan = %d  before bounds\n", nActualTimespan);
+    int64 nActualTimespan = (int64)pindexLast->nTime - (int64)pindexFirst->nTime;
+    printf("  nActualTimespan = %"PRI64d"  before bounds\n", nActualTimespan);
     if (nActualTimespan < nTargetTimespan/4)
         nActualTimespan = nTargetTimespan/4;
     if (nActualTimespan > nTargetTimespan*4)
@@ -842,29 +843,26 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast)
 
     /// debug print
     printf("GetNextWorkRequired RETARGET\n");
-    printf("nTargetTimespan = %d    nActualTimespan = %d\n", nTargetTimespan, nActualTimespan);
+    printf("nTargetTimespan = %"PRI64d"    nActualTimespan = %"PRI64d"\n", nTargetTimespan, nActualTimespan);
     printf("Before: %08x  %s\n", pindexLast->nBits, CBigNum().SetCompact(pindexLast->nBits).getuint256().ToString().c_str());
     printf("After:  %08x  %s\n", bnNew.GetCompact(), bnNew.getuint256().ToString().c_str());
 
     return bnNew.GetCompact();
 }
 
-vector<int> vStartingHeight;
-void AddStartingHeight(int nStartingHeight)
-{
-    if (nStartingHeight != -1)
-    {
-        vStartingHeight.push_back(nStartingHeight);
-        sort(vStartingHeight.begin(), vStartingHeight.end());
-    }
-}
-
 bool IsInitialBlockDownload()
 {
-    int nMedian = 69000;
-    if (vStartingHeight.size() >= 5)
-        nMedian = vStartingHeight[vStartingHeight.size()/2];
-    return nBestHeight < nMedian-1000;
+    if (pindexBest == NULL)
+        return true;
+    static int64 nLastUpdate;
+    static CBlockIndex* pindexLastBest;
+    if (pindexBest != pindexLastBest)
+    {
+        pindexLastBest = pindexBest;
+        nLastUpdate = GetTime();
+    }
+    return (GetTime() - nLastUpdate < 10 &&
+            pindexBest->nTime < GetTime() - 24 * 60 * 60);
 }
 
 
@@ -1368,6 +1366,8 @@ bool CBlock::AcceptBlock()
         return error("AcceptBlock() : rejected by checkpoint lockin at 33333");
     if (pindexPrev->nHeight+1 == 68555 && hash != uint256("0x00000000001e1b4903550a0b96e9a9405c8a95f387162e4944e8d9fbe501cd6a"))
         return error("AcceptBlock() : rejected by checkpoint lockin at 68555");
+    if (pindexPrev->nHeight+1 == 70567 && hash != uint256("0x00000000006a49b14bcf27462068f1264c961f11fa2e0eddd2be0791e1d4124a"))
+        return error("AcceptBlock() : rejected by checkpoint lockin at 70567");
 
     // Write block to history file
     if (!CheckDiskSpace(::GetSerializeSize(*this, SER_DISK)))
@@ -1506,7 +1506,7 @@ bool CheckDiskSpace(int64 nAdditionalBytes)
     {
         fShutdown = true;
         printf("***  %s***\n", _("Warning: Disk space is low  "));
-#if wxUSE_GUI
+#ifdef GUI
         ThreadSafeMessageBox(_("Warning: Disk space is low  "), "Bitcoin", wxOK | wxICON_EXCLAMATION);
 #endif
         CreateThread(Shutdown, NULL);
@@ -1920,7 +1920,6 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         }
 
         AddTimeData(pfrom->addr.ip, nTime);
-        AddStartingHeight(pfrom->nStartingHeight);
 
         // Change version
         if (pfrom->nVersion >= 209)
@@ -2494,7 +2493,7 @@ void GenerateBitcoins(bool fGenerate)
     }
     if (fGenerateBitcoins)
     {
-        int nProcessors = wxThread::GetCPUCount();
+        int nProcessors = boost::thread::hardware_concurrency();
         printf("%d processors\n", nProcessors);
         if (nProcessors < 1)
             nProcessors = 1;
@@ -2546,33 +2545,18 @@ int FormatHashBlocks(void* pbuffer, unsigned int len)
 }
 
 using CryptoPP::ByteReverse;
-static int detectlittleendian = 1;
 
-void BlockSHA256(const void* pin, unsigned int nBlocks, void* pout)
+static const unsigned int pSHA256InitState[8] =
+{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+
+inline void SHA256Transform(void* pstate, void* pinput, const void* pinit)
 {
-    unsigned int* pinput = (unsigned int*)pin;
-    unsigned int* pstate = (unsigned int*)pout;
-
-    CryptoPP::SHA256::InitState(pstate);
-
-    if (*(char*)&detectlittleendian != 0)
-    {
-        for (int n = 0; n < nBlocks; n++)
-        {
-            unsigned int pbuf[16];
-            for (int i = 0; i < 16; i++)
-                pbuf[i] = ByteReverse(pinput[n * 16 + i]);
-            CryptoPP::SHA256::Transform(pstate, pbuf);
-        }
-        for (int i = 0; i < 8; i++)
-            pstate[i] = ByteReverse(pstate[i]);
-    }
-    else
-    {
-        for (int n = 0; n < nBlocks; n++)
-            CryptoPP::SHA256::Transform(pstate, pinput + n * 16);
-    }
+    memcpy(pstate, pinit, 32);
+    CryptoPP::SHA256::Transform((CryptoPP::word32*)pstate, (CryptoPP::word32*)pinput);
 }
+
+
+
 
 
 void BitcoinMiner()
@@ -2588,7 +2572,7 @@ void BitcoinMiner()
         Sleep(50);
         if (fShutdown)
             return;
-        while (vNodes.empty())
+        while (vNodes.empty() || IsInitialBlockDownload())
         {
             Sleep(1000);
             if (fShutdown)
@@ -2671,7 +2655,7 @@ void BitcoinMiner()
         //
         // Prebuild hash buffer
         //
-        struct unnamed1
+        struct tmpworkspace
         {
             struct unnamed2
             {
@@ -2686,18 +2670,28 @@ void BitcoinMiner()
             unsigned char pchPadding0[64];
             uint256 hash1;
             unsigned char pchPadding1[64];
-        }
-        tmp;
+        };
+        char tmpbuf[sizeof(tmpworkspace)+16];
+        tmpworkspace& tmp = *(tmpworkspace*)alignup<16>(tmpbuf);
 
         tmp.block.nVersion       = pblock->nVersion;
         tmp.block.hashPrevBlock  = pblock->hashPrevBlock  = (pindexPrev ? pindexPrev->GetBlockHash() : 0);
         tmp.block.hashMerkleRoot = pblock->hashMerkleRoot = pblock->BuildMerkleTree();
         tmp.block.nTime          = pblock->nTime          = max((pindexPrev ? pindexPrev->GetMedianTimePast()+1 : 0), GetAdjustedTime());
         tmp.block.nBits          = pblock->nBits          = nBits;
-        tmp.block.nNonce         = pblock->nNonce         = 1;
+        tmp.block.nNonce         = pblock->nNonce         = 0;
 
         unsigned int nBlocks0 = FormatHashBlocks(&tmp.block, sizeof(tmp.block));
         unsigned int nBlocks1 = FormatHashBlocks(&tmp.hash1, sizeof(tmp.hash1));
+
+        // Byte swap all the input buffer
+        for (int i = 0; i < sizeof(tmp)/4; i++)
+            ((unsigned int*)&tmp)[i] = ByteReverse(((unsigned int*)&tmp)[i]);
+
+        // Precalc the first half of the first hash, which stays constant
+        uint256 midstatebuf[2];
+        uint256& midstate = *alignup<16>(midstatebuf);
+        SHA256Transform(&midstate, &tmp.block, pSHA256InitState);
 
 
         //
@@ -2705,47 +2699,55 @@ void BitcoinMiner()
         //
         int64 nStart = GetTime();
         uint256 hashTarget = CBigNum().SetCompact(pblock->nBits).getuint256();
-        uint256 hash;
+        uint256 hashbuf[2];
+        uint256& hash = *alignup<16>(hashbuf);
         loop
         {
-            BlockSHA256(&tmp.block, nBlocks0, &tmp.hash1);
-            BlockSHA256(&tmp.hash1, nBlocks1, &hash);
+            SHA256Transform(&tmp.hash1, (char*)&tmp.block + 64, &midstate);
+            SHA256Transform(&hash, &tmp.hash1, pSHA256InitState);
 
-            if (hash <= hashTarget)
+            if (((unsigned short*)&hash)[14] == 0)
             {
-                pblock->nNonce = tmp.block.nNonce;
-                assert(hash == pblock->GetHash());
+                // Byte swap the result after preliminary check
+                for (int i = 0; i < sizeof(hash)/4; i++)
+                    ((unsigned int*)&hash)[i] = ByteReverse(((unsigned int*)&hash)[i]);
 
-                    //// debug print
-                    printf("BitcoinMiner:\n");
-                    printf("proof-of-work found  \n  hash: %s  \ntarget: %s\n", hash.GetHex().c_str(), hashTarget.GetHex().c_str());
-                    pblock->print();
-                    printf("%s ", DateTimeStrFormat("%x %H:%M", GetTime()).c_str());
-                    printf("generated %s\n", FormatMoney(pblock->vtx[0].vout[0].nValue).c_str());
-
-                SetThreadPriority(THREAD_PRIORITY_NORMAL);
-                CRITICAL_BLOCK(cs_main)
+                if (hash <= hashTarget)
                 {
-                    if (pindexPrev == pindexBest)
+                    pblock->nNonce = ByteReverse(tmp.block.nNonce);
+                    assert(hash == pblock->GetHash());
+
+                        //// debug print
+                        printf("BitcoinMiner:\n");
+                        printf("proof-of-work found  \n  hash: %s  \ntarget: %s\n", hash.GetHex().c_str(), hashTarget.GetHex().c_str());
+                        pblock->print();
+                        printf("%s ", DateTimeStrFormat("%x %H:%M", GetTime()).c_str());
+                        printf("generated %s\n", FormatMoney(pblock->vtx[0].vout[0].nValue).c_str());
+
+                    SetThreadPriority(THREAD_PRIORITY_NORMAL);
+                    CRITICAL_BLOCK(cs_main)
                     {
-                        // Save key
-                        if (!AddKey(key))
-                            return;
-                        key.MakeNewKey();
+                        if (pindexPrev == pindexBest)
+                        {
+                            // Save key
+                            if (!AddKey(key))
+                                return;
+                            key.MakeNewKey();
 
-                        // Track how many getdata requests this block gets
-                        CRITICAL_BLOCK(cs_mapRequestCount)
-                            mapRequestCount[pblock->GetHash()] = 0;
+                            // Track how many getdata requests this block gets
+                            CRITICAL_BLOCK(cs_mapRequestCount)
+                                mapRequestCount[pblock->GetHash()] = 0;
 
-                        // Process this block the same as if we had received it from another node
-                        if (!ProcessBlock(NULL, pblock.release()))
-                            printf("ERROR in BitcoinMiner, ProcessBlock, block not accepted\n");
+                            // Process this block the same as if we had received it from another node
+                            if (!ProcessBlock(NULL, pblock.release()))
+                                printf("ERROR in BitcoinMiner, ProcessBlock, block not accepted\n");
+                        }
                     }
-                }
-                SetThreadPriority(THREAD_PRIORITY_LOWEST);
+                    SetThreadPriority(THREAD_PRIORITY_LOWEST);
 
-                Sleep(500);
-                break;
+                    Sleep(500);
+                    break;
+                }
             }
 
             // Update nTime every few seconds
@@ -2796,27 +2798,10 @@ void BitcoinMiner()
                 if (nTransactionsUpdated != nTransactionsUpdatedLast && GetTime() - nStart > 60)
                     break;
                 if (pindexPrev != pindexBest)
-                {
-                    // Pause generating during initial download
-                    if (GetTime() - nStart < 20)
-                    {
-                        CBlockIndex* pindexTmp;
-                        do
-                        {
-                            pindexTmp = pindexBest;
-                            for (int i = 0; i < 10; i++)
-                            {
-                                Sleep(1000);
-                                if (fShutdown)
-                                    return;
-                            }
-                        }
-                        while (pindexTmp != pindexBest);
-                    }
                     break;
-                }
 
-                tmp.block.nTime = pblock->nTime = max(pindexPrev->GetMedianTimePast()+1, GetAdjustedTime());
+                pblock->nTime = max(pindexPrev->GetMedianTimePast()+1, GetAdjustedTime());
+                tmp.block.nTime = ByteReverse(pblock->nTime);
             }
         }
     }
