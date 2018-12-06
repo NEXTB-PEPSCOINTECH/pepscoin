@@ -250,7 +250,7 @@ CMainFrame::CMainFrame(wxWindow* parent) : CMainFrameBase(parent)
 #ifdef __WXMSW__
     SetIcon(wxICON(bitcoin));
 #else
-    SetIcon(bitcoin20_xpm);
+    SetIcon(bitcoin80_xpm);
     SetBackgroundColour(m_toolBar->GetBackgroundColour());
     wxFont fontTmp = m_staticText41->GetFont();
     fontTmp.SetFamily(wxFONTFAMILY_TELETYPE);
@@ -375,13 +375,13 @@ void CMainFrame::OnIconize(wxIconizeEvent& event)
     // to get rid of the deprecated warning.  Just ignore it.
     if (!event.Iconized())
         fClosedToTray = false;
-#ifdef __WXMSW__
+//#ifdef __WXMSW__
     // The tray icon sometimes disappears on ubuntu karmic
-    // Hiding the taskbar button doesn't work reliably on ubuntu lucid
+    // Hiding the taskbar button doesn't work cleanly on ubuntu lucid
     if (fMinimizeToTray && event.Iconized())
         fClosedToTray = true;
     Show(!fClosedToTray);
-#endif
+//#endif
     ptaskbaricon->Show(fMinimizeToTray || fClosedToTray);
 }
 
@@ -2437,9 +2437,11 @@ void CMyTaskBarIcon::Show(bool fShow)
         {
             strlcpy(pszPrevTip, strTooltip.c_str(), sizeof(pszPrevTip));
 #ifdef __WXMSW__
-            SetIcon(wxICON(bitcoin), strTooltip);
+            // somehow it'll choose the wrong size and scale it down if
+            // we use the main icon, so we hand it one with only 16x16
+            SetIcon(wxICON(favicon), strTooltip);
 #else
-            SetIcon(bitcoin20_xpm, strTooltip);
+            SetIcon(bitcoin80_xpm, strTooltip);
 #endif
         }
     }
