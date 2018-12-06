@@ -53,6 +53,9 @@ CCriticalSection cs_mapAddressBook;
 
 vector<unsigned char> vchDefaultKey;
 
+double dHashesPerSec;
+int64 nHPSTimerStart;
+
 // Settings
 int fGenerateBitcoins = false;
 int64 nTransactionFee = 0;
@@ -535,7 +538,7 @@ bool CTransaction::AcceptTransaction(CTxDB& txdb, bool fCheckInputs, bool* pfMis
     // Check against previous transactions
     map<uint256, CTxIndex> mapUnused;
     int64 nFees = 0;
-    if (fCheckInputs && !ConnectInputs(txdb, mapUnused, CDiskTxPos(1,1,1), 0, nFees, false, false))
+    if (fCheckInputs && !ConnectInputs(txdb, mapUnused, CDiskTxPos(1,1,1), pindexBest, nFees, false, false))
     {
         if (pfMissingInputs)
             *pfMissingInputs = true;
@@ -741,7 +744,7 @@ void ResendWalletTransactions()
     if (GetTime() < nNextTime)
         return;
     bool fFirst = (nNextTime == 0);
-    nNextTime = GetTime() + GetRand(120 * 60);
+    nNextTime = GetTime() + GetRand(30 * 60);
     if (fFirst)
         return;
 
@@ -757,7 +760,7 @@ void ResendWalletTransactions()
             CWalletTx& wtx = item.second;
             // Don't rebroadcast until it's had plenty of time that
             // it should have gotten in already by now.
-            if (nTimeBestReceived - wtx.nTimeReceived > 60 * 60)
+            if (nTimeBestReceived - (int64)wtx.nTimeReceived > 5 * 60)
                 mapSorted.insert(make_pair(wtx.nTimeReceived, &wtx));
         }
         foreach(PAIRTYPE(const unsigned int, CWalletTx*)& item, mapSorted)
@@ -885,7 +888,7 @@ void Lockdown(CBlockIndex* pindexNew)
     printf("Lockdown:  current best=%s  height=%d  work=%s\n", hashBestChain.ToString().substr(0,22).c_str(), nBestHeight, bnBestChainWork.ToString().c_str());
     printf("Lockdown: IsLockdown()=%d\n", (IsLockdown() ? 1 : 0));
     if (IsLockdown())
-        printf("Lockdown: WARNING: Displayed transactions may not be correct!  You may need to upgrade.\n");
+        printf("Lockdown: WARNING: Displayed transactions may not be correct!  You may need to upgrade, or other nodes may need to upgrade.\n");
 }
 
 
@@ -928,7 +931,8 @@ bool CTransaction::DisconnectInputs(CTxDB& txdb)
 }
 
 
-bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPool, CDiskTxPos posThisTx, int nHeight, int64& nFees, bool fBlock, bool fMiner, int64 nMinFee)
+bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPool, CDiskTxPos posThisTx,
+                                 CBlockIndex* pindexBlock, int64& nFees, bool fBlock, bool fMiner, int64 nMinFee)
 {
     // Take over previous transactions' spent pointers
     if (!IsCoinBase())
@@ -980,9 +984,9 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
 
             // If prev is coinbase, check that it's matured
             if (txPrev.IsCoinBase())
-                for (CBlockIndex* pindex = pindexBest; pindex && nBestHeight - pindex->nHeight < COINBASE_MATURITY-1; pindex = pindex->pprev)
+                for (CBlockIndex* pindex = pindexBlock; pindex && pindexBlock->nHeight - pindex->nHeight < COINBASE_MATURITY; pindex = pindex->pprev)
                     if (pindex->nBlockPos == txindex.pos.nBlockPos && pindex->nFile == txindex.pos.nFile)
-                        return error("ConnectInputs() : tried to spend coinbase at depth %d", nBestHeight - pindex->nHeight);
+                        return error("ConnectInputs() : tried to spend coinbase at depth %d", pindexBlock->nHeight - pindex->nHeight);
 
             // Verify signature
             if (!VerifySignature(txPrev, *this, i))
@@ -1002,6 +1006,14 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
                 mapTestPool[prevout.hash] = txindex;
 
             nValueIn += txPrev.vout[prevout.n].nValue;
+
+            // Check for negative or overflow input values
+            if (txPrev.vout[prevout.n].nValue < 0)
+                return error("ConnectInputs() : txin.nValue negative");
+            if (txPrev.vout[prevout.n].nValue > MAX_MONEY)
+                return error("ConnectInputs() : txin.nValue too high");
+            if (nValueIn > MAX_MONEY)
+                return error("ConnectInputs() : txin total too high");
         }
 
         // Tally transaction fees
@@ -1016,7 +1028,7 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
     if (fBlock)
     {
         // Add transaction to disk index
-        if (!txdb.AddTxIndex(*this, posThisTx, nHeight))
+        if (!txdb.AddTxIndex(*this, posThisTx, pindexBlock->nHeight))
             return error("ConnectInputs() : AddTxPos failed");
     }
     else if (fMiner)
@@ -1105,7 +1117,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex)
         CDiskTxPos posThisTx(pindex->nFile, pindex->nBlockPos, nTxPos);
         nTxPos += ::GetSerializeSize(tx, SER_DISK);
 
-        if (!tx.ConnectInputs(txdb, mapUnused, posThisTx, pindex->nHeight, nFees, true, false))
+        if (!tx.ConnectInputs(txdb, mapUnused, posThisTx, pindex, nFees, true, false))
             return false;
     }
 
@@ -1376,14 +1388,21 @@ bool CBlock::AcceptBlock()
         return error("AcceptBlock() : incorrect proof of work");
 
     // Check that the block chain matches the known block chain up to a checkpoint
-    if (pindexPrev->nHeight+1 == 11111 && hash != uint256("0x0000000069e244f73d78e8fd29ba2fd2ed618bd6fa2ee92559f542fdb26e7c1d"))
-        return error("AcceptBlock() : rejected by checkpoint lockin at 11111");
-    if (pindexPrev->nHeight+1 == 33333 && hash != uint256("0x000000002dd5588a74784eaa7ab0507a18ad16a236e7b1ce69f00d7ddfb5d0a6"))
-        return error("AcceptBlock() : rejected by checkpoint lockin at 33333");
-    if (pindexPrev->nHeight+1 == 68555 && hash != uint256("0x00000000001e1b4903550a0b96e9a9405c8a95f387162e4944e8d9fbe501cd6a"))
-        return error("AcceptBlock() : rejected by checkpoint lockin at 68555");
-    if (pindexPrev->nHeight+1 == 70567 && hash != uint256("0x00000000006a49b14bcf27462068f1264c961f11fa2e0eddd2be0791e1d4124a"))
-        return error("AcceptBlock() : rejected by checkpoint lockin at 70567");
+    if ((pindexPrev->nHeight+1 == 11111 && hash != uint256("0x0000000069e244f73d78e8fd29ba2fd2ed618bd6fa2ee92559f542fdb26e7c1d")) ||
+        (pindexPrev->nHeight+1 == 33333 && hash != uint256("0x000000002dd5588a74784eaa7ab0507a18ad16a236e7b1ce69f00d7ddfb5d0a6")) ||
+        (pindexPrev->nHeight+1 == 68555 && hash != uint256("0x00000000001e1b4903550a0b96e9a9405c8a95f387162e4944e8d9fbe501cd6a")) ||
+        (pindexPrev->nHeight+1 == 70567 && hash != uint256("0x00000000006a49b14bcf27462068f1264c961f11fa2e0eddd2be0791e1d4124a")) ||
+        (pindexPrev->nHeight+1 == 74000 && hash != uint256("0x0000000000573993a3c9e41ce34471c079dcf5f52a0e824a81e7f953b8661a20")))
+        return error("AcceptBlock() : rejected by checkpoint lockin at %d", pindexPrev->nHeight+1);
+
+    // Scanback checkpoint lockin
+    for (CBlockIndex* pindex = pindexPrev; pindex->nHeight >= 74000; pindex = pindex->pprev)
+    {
+        if (pindex->nHeight == 74000 && pindex->GetBlockHash() != uint256("0x0000000000573993a3c9e41ce34471c079dcf5f52a0e824a81e7f953b8661a20"))
+            return error("AcceptBlock() : rejected by scanback lockin at %d", pindex->nHeight);
+        if (pindex->nHeight == 74638 && pindex->GetBlockHash() == uint256("0x0000000000790ab3f22ec756ad43b6ab569abf0bddeb97c67a6f7b1470a7ec1c"))
+            return error("AcceptBlock() : rejected by scanback lockin at %d", pindex->nHeight);
+    }
 
     // Write block to history file
     if (!CheckDiskSpace(::GetSerializeSize(*this, SER_DISK)))
@@ -2221,7 +2240,7 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         // This includes all nodes that are currently online,
         // since they rebroadcast an addr every 24 hours
         pfrom->vAddrToSend.clear();
-        int64 nSince = GetAdjustedTime() - 24 * 60 * 60; // in the last 24 hours
+        int64 nSince = GetAdjustedTime() - 12 * 60 * 60; // in the last 12 hours
         CRITICAL_BLOCK(cs_mapAddresses)
         {
             unsigned int nSize = mapAddresses.size();
@@ -2542,6 +2561,9 @@ void ThreadBitcoinMiner(void* parg)
         PrintException(NULL, "ThreadBitcoinMiner()");
     }
     UIThreadCall(bind(CalledSetStatusBar, "", 0));
+    nHPSTimerStart = 0;
+    if (vnThreadsRunning[3] == 0)
+        dHashesPerSec = 0;
     printf("ThreadBitcoinMiner exiting, %d threads remaining\n", vnThreadsRunning[3]);
 }
 
@@ -2571,6 +2593,8 @@ inline void SHA256Transform(void* pstate, void* pinput, const void* pinit)
     CryptoPP::SHA256::Transform((CryptoPP::word32*)pstate, (CryptoPP::word32*)pinput);
 }
 
+static const int NPAR = 32;
+extern void Double_BlockSHA256(const void* pin, void* pout, const void* pinit, unsigned int hash[8][NPAR], const void* init2);
 
 
 
@@ -2652,7 +2676,7 @@ void BitcoinMiner()
                     int64 nMinFee = tx.GetMinFee(nBlockSize);
 
                     map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
-                    if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), 0, nFees, false, true, nMinFee))
+                    if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), pindexPrev, nFees, false, true, nMinFee))
                         continue;
                     swap(mapTestPool, mapTestPoolTmp);
 
@@ -2713,14 +2737,40 @@ void BitcoinMiner()
         //
         // Search
         //
+        bool f4WaySSE2 = mapArgs.count("-4way");
         int64 nStart = GetTime();
         uint256 hashTarget = CBigNum().SetCompact(pblock->nBits).getuint256();
         uint256 hashbuf[2];
         uint256& hash = *alignup<16>(hashbuf);
         loop
         {
-            SHA256Transform(&tmp.hash1, (char*)&tmp.block + 64, &midstate);
-            SHA256Transform(&hash, &tmp.hash1, pSHA256InitState);
+#ifdef FOURWAYSSE2
+            if (f4WaySSE2)
+            {
+                // tcatm's 4-way SSE2 SHA-256
+                tmp.block.nNonce += NPAR;
+                unsigned int thashbuf[9][NPAR];
+                unsigned int (&thash)[9][NPAR] = *alignup<16>(&thashbuf);
+                Double_BlockSHA256((char*)&tmp.block + 64, &tmp.hash1, &midstate, thash, pSHA256InitState);
+                ((unsigned short*)&hash)[14] = 0xffff;
+                for (int j = 0; j < NPAR; j++)
+                {
+                    if (thash[7][j] == 0)
+                    {
+                        for (int i = 0; i < sizeof(hash)/4; i++)
+                            ((unsigned int*)&hash)[i] = thash[i][j];
+                        pblock->nNonce = ByteReverse(tmp.block.nNonce + j);
+                    }
+                }
+            }
+            else
+#endif
+            {
+                // Crypto++ SHA-256
+                tmp.block.nNonce++;
+                SHA256Transform(&tmp.hash1, (char*)&tmp.block + 64, &midstate);
+                SHA256Transform(&hash, &tmp.hash1, pSHA256InitState);
+            }
 
             if (((unsigned short*)&hash)[14] == 0)
             {
@@ -2730,7 +2780,10 @@ void BitcoinMiner()
 
                 if (hash <= hashTarget)
                 {
-                    pblock->nNonce = ByteReverse(tmp.block.nNonce);
+#ifdef FOURWAYSSE2
+                    if (!f4WaySSE2)
+#endif
+                        pblock->nNonce = ByteReverse(tmp.block.nNonce);
                     assert(hash == pblock->GetHash());
 
                         //// debug print
@@ -2768,25 +2821,28 @@ void BitcoinMiner()
 
             // Update nTime every few seconds
             const unsigned int nMask = 0xffff;
-            if ((++tmp.block.nNonce & nMask) == 0)
+            const int nHashesPerCycle = (nMask+1);
+            if ((tmp.block.nNonce & nMask) == 0)
             {
                 // Meter hashes/sec
-                static int64 nTimerStart;
-                static int nHashCounter;
-                if (nTimerStart == 0)
-                    nTimerStart = GetTimeMillis();
+                static int nCycleCounter;
+                if (nHPSTimerStart == 0)
+                {
+                    nHPSTimerStart = GetTimeMillis();
+                    nCycleCounter = 0;
+                }
                 else
-                    nHashCounter++;
-                if (GetTimeMillis() - nTimerStart > 4000)
+                    nCycleCounter++;
+                if (GetTimeMillis() - nHPSTimerStart > 4000)
                 {
                     static CCriticalSection cs;
                     CRITICAL_BLOCK(cs)
                     {
-                        if (GetTimeMillis() - nTimerStart > 4000)
+                        if (GetTimeMillis() - nHPSTimerStart > 4000)
                         {
-                            double dHashesPerSec = 1000.0 * (nMask+1) * nHashCounter / (GetTimeMillis() - nTimerStart);
-                            nTimerStart = GetTimeMillis();
-                            nHashCounter = 0;
+                            dHashesPerSec = 1000.0 * nHashesPerCycle * nCycleCounter / (GetTimeMillis() - nHPSTimerStart);
+                            nHPSTimerStart = GetTimeMillis();
+                            nCycleCounter = 0;
                             string strStatus = strprintf("    %.0f khash/s", dHashesPerSec/1000.0);
                             UIThreadCall(bind(CalledSetStatusBar, strStatus, 0));
                             static int64 nLogTime;

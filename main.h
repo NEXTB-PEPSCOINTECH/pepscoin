@@ -18,6 +18,7 @@ static const unsigned int MAX_SIZE = 0x02000000;
 static const unsigned int MAX_BLOCK_SIZE = 1000000;
 static const int64 COIN = 100000000;
 static const int64 CENT = 1000000;
+static const int64 MAX_MONEY = 21000000 * COIN;
 static const int COINBASE_MATURITY = 100;
 
 static const CBigNum bnProofOfWorkLimit(~uint256(0) >> 32);
@@ -42,6 +43,8 @@ extern CCriticalSection cs_mapRequestCount;
 extern map<string, string> mapAddressBook;
 extern CCriticalSection cs_mapAddressBook;
 extern vector<unsigned char> vchDefaultKey;
+extern double dHashesPerSec;
+extern int64 nHPSTimerStart;
 
 // Settings
 extern int fGenerateBitcoins;
@@ -469,10 +472,18 @@ public:
         if (vin.empty() || vout.empty())
             return error("CTransaction::CheckTransaction() : vin or vout empty");
 
-        // Check for negative values
+        // Check for negative or overflow output values
+        int64 nValueOut = 0;
         foreach(const CTxOut& txout, vout)
+        {
             if (txout.nValue < 0)
                 return error("CTransaction::CheckTransaction() : txout.nValue negative");
+            if (txout.nValue > MAX_MONEY)
+                return error("CTransaction::CheckTransaction() : txout.nValue too high");
+            nValueOut += txout.nValue;
+            if (nValueOut > MAX_MONEY)
+                return error("CTransaction::CheckTransaction() : txout total too high");
+        }
 
         if (IsCoinBase())
         {
@@ -611,7 +622,8 @@ public:
 
 
     bool DisconnectInputs(CTxDB& txdb);
-    bool ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPool, CDiskTxPos posThisTx, int nHeight, int64& nFees, bool fBlock, bool fMiner, int64 nMinFee=0);
+    bool ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPool, CDiskTxPos posThisTx,
+                       CBlockIndex* pindexBlock, int64& nFees, bool fBlock, bool fMiner, int64 nMinFee=0);
     bool ClientConnectInputs();
 
     bool AcceptTransaction(CTxDB& txdb, bool fCheckInputs=true, bool* pfMissingInputs=NULL);

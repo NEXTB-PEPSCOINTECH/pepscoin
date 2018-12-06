@@ -137,7 +137,10 @@ bool AppInit2(int argc, char* argv[])
     ParseParameters(argc, argv);
 
     if (mapArgs.count("-datadir"))
-        strlcpy(pszSetDataDir, mapArgs["-datadir"].c_str(), sizeof(pszSetDataDir));
+    {
+        filesystem::path pathDataDir = filesystem::system_complete(mapArgs["-datadir"]);
+        strlcpy(pszSetDataDir, pathDataDir.string().c_str(), sizeof(pszSetDataDir));
+    }
 
     ReadConfigFile(mapArgs, mapMultiArgs); // Must be done after processing datadir
 
@@ -147,8 +150,8 @@ bool AppInit2(int argc, char* argv[])
           _("Usage:") + "\t\t\t\t\t\t\t\t\t\t\n" +
             "  bitcoin [options]                   \t  " + "\n" +
             "  bitcoin [options] <command> [params]\t  " + _("Send command to -server or bitcoind\n") +
-            "  bitcoin [options] <command> -?      \t\t  " + _("Get help for a command\n") +
-            "  bitcoin help                        \t\t\t  " + _("List commands\n") +
+            "  bitcoin [options] help              \t\t  " + _("List commands\n") +
+            "  bitcoin [options] help <command>    \t\t  " + _("Get help for a command\n") +
           _("Options:\n") +
             "  -conf=<file>    \t  " + _("Specify configuration file (default: bitcoin.conf)\n") +
             "  -gen            \t  " + _("Generate coins\n") +
@@ -363,6 +366,17 @@ bool AppInit2(int argc, char* argv[])
         }
     }
 
+    if (mapArgs.count("-paytxfee"))
+    {
+        if (!ParseMoney(mapArgs["-paytxfee"], nTransactionFee))
+        {
+            wxMessageBox(_("Invalid amount for -paytxfee=<amount>"), "Bitcoin");
+            return false;
+        }
+        if (nTransactionFee > 1 * COIN)
+            wxMessageBox(_("Warning: -paytxfee is set very high.  This is the transaction fee you will pay if you send a transaction."), "Bitcoin");
+    }
+
     //
     // Create the main window and start the node
     //
@@ -382,7 +396,7 @@ bool AppInit2(int argc, char* argv[])
     if (mapArgs.count("-server") || fDaemon)
         CreateThread(ThreadRPCServer, NULL);
 
-#ifdef GUI
+#if defined(__WXMSW__) && defined(GUI)
     if (fFirstRun)
         SetStartOnSystemStartup(true);
 #endif
