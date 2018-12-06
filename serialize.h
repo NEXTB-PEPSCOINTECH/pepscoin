@@ -19,8 +19,11 @@ class CScript;
 class CDataStream;
 class CAutoFile;
 
-static const int VERSION = 310;
-static const char* pszSubVer = ".1";
+static const unsigned int MAX_SIZE = 0x02000000;
+
+static const int VERSION = 311;
+static const char* pszSubVer = ".0";
+
 
 
 
@@ -80,6 +83,13 @@ enum
     }
 
 #define READWRITE(obj)      (nSerSize += ::SerReadWrite(s, (obj), nType, nVersion, ser_action))
+
+#define READWRITEVER(obj)       \
+    do {                        \
+        READWRITE((obj));       \
+        if ((obj) == 10300)     \
+            (obj) = 300;        \
+    } while (false)
 
 
 
@@ -217,7 +227,7 @@ uint64 ReadCompactSize(Stream& is)
         READDATA(is, nSize);
         nSizeRet = nSize;
     }
-    if (nSizeRet > (uint64)INT_MAX)
+    if (nSizeRet > (uint64)MAX_SIZE)
         throw std::ios_base::failure("ReadCompactSize() : size too large");
     return nSizeRet;
 }
