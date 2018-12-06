@@ -76,7 +76,7 @@ bool ProcessMessages(CNode* pfrom);
 bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv);
 bool SendMessages(CNode* pto, bool fSendTrickle);
 int64 GetBalance();
-bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CReserveKey& reservekey, int64& nFeeRequiredRet);
+bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CReserveKey& reservekey, int64& nFeeRet);
 bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);
 bool BroadcastTransaction(CWalletTx& wtxNew);
 string SendMoney(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, bool fAskFee=false);
@@ -487,6 +487,11 @@ public:
         return false;
     }
 
+    bool IsFromMe() const
+    {
+        return (GetDebit() > 0);
+    }
+
     int64 GetDebit() const
     {
         int64 nDebit = 0;
@@ -580,7 +585,6 @@ public:
         return true;
     }
 
-
     friend bool operator==(const CTransaction& a, const CTransaction& b)
     {
         return (a.nVersion  == b.nVersion &&
@@ -617,6 +621,9 @@ public:
     }
 
 
+    bool ReadFromDisk(CTxDB& txdb, COutPoint prevout, CTxIndex& txindexRet);
+    bool ReadFromDisk(CTxDB& txdb, COutPoint prevout);
+    bool ReadFromDisk(COutPoint prevout);
     bool DisconnectInputs(CTxDB& txdb);
     bool ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPool, CDiskTxPos posThisTx,
                        CBlockIndex* pindexBlock, int64& nFees, bool fBlock, bool fMiner, int64 nMinFee=0);
@@ -787,8 +794,23 @@ public:
         return nCreditCached;
     }
 
+    bool IsFromMe() const
+    {
+        return (GetDebit() > 0);
+    }
+
     bool IsConfirmed() const
     {
+        // Quick answer in most cases
+        if (!IsFinal())
+            return false;
+        if (GetDepthInMainChain() >= 1)
+            return true;
+        if (!IsFromMe()) // using wtx's cached debit
+            return false;
+
+        // If no confirmations but it's from us, we can still
+        // consider it confirmed if all dependencies are confirmed
         map<uint256, const CMerkleTx*> mapPrev;
         vector<const CMerkleTx*> vWorkQueue;
         vWorkQueue.reserve(vtxPrev.size()+1);
@@ -801,7 +823,7 @@ public:
                 return false;
             if (ptx->GetDepthInMainChain() >= 1)
                 return true;
-            if (ptx->GetDebit() <= 0)
+            if (!ptx->IsFromMe())
                 return false;
 
             if (mapPrev.empty())
@@ -1654,7 +1676,7 @@ public:
     bool Cancels(const CAlert& alert) const
     {
         if (!IsInEffect())
-            false;
+            return false; // this was a no-op before 31403
         return (alert.nID <= nCancel || setCancel.count(alert.nID));
     }
 

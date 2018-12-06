@@ -277,6 +277,34 @@ void EraseOrphanTx(uint256 hash)
 // CTransaction
 //
 
+bool CTransaction::ReadFromDisk(CTxDB& txdb, COutPoint prevout, CTxIndex& txindexRet)
+{
+    SetNull();
+    if (!txdb.ReadTxIndex(prevout.hash, txindexRet))
+        return false;
+    if (!ReadFromDisk(txindexRet.pos))
+        return false;
+    if (prevout.n >= vout.size())
+    {
+        SetNull();
+        return false;
+    }
+    return true;
+}
+
+bool CTransaction::ReadFromDisk(CTxDB& txdb, COutPoint prevout)
+{
+    CTxIndex txindex;
+    return ReadFromDisk(txdb, prevout, txindex);
+}
+
+bool CTransaction::ReadFromDisk(COutPoint prevout)
+{
+    CTxDB txdb("r");
+    CTxIndex txindex;
+    return ReadFromDisk(txdb, prevout, txindex);
+}
+
 bool CTxIn::IsMine() const
 {
     CRITICAL_BLOCK(cs_mapWallet)
@@ -929,7 +957,7 @@ bool CheckProofOfWork(uint256 hash, unsigned int nBits)
 
 bool IsInitialBlockDownload()
 {
-    if (pindexBest == NULL)
+    if (pindexBest == NULL || (!fTestNet && nBestHeight < 74000))
         return true;
     static int64 nLastUpdate;
     static CBlockIndex* pindexLastBest;
@@ -2172,6 +2200,24 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         if (pfrom->nVersion < 209)
             pfrom->vRecv.SetVersion(min(pfrom->nVersion, VERSION));
 
+        if (!pfrom->fInbound)
+        {
+            // Advertise our address
+            if (addrLocalHost.IsRoutable() && !fUseProxy)
+            {
+                CAddress addr(addrLocalHost);
+                addr.nTime = GetAdjustedTime();
+                pfrom->PushAddress(addr);
+            }
+
+            // Get recent addresses
+            if (pfrom->nVersion >= 31402 || mapAddresses.size() < 1000)
+            {
+                pfrom->PushMessage("getaddr");
+                pfrom->fGetAddr = true;
+            }
+        }
+
         // Ask the first connected node for block updates
         static int nAskedForBlocks;
         if (!pfrom->fClient && (nAskedForBlocks < 1 || vNodes.size() <= 1))
@@ -2208,14 +2254,18 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
     {
         vector<CAddress> vAddr;
         vRecv >> vAddr;
-        if (pfrom->nVersion < 200) // don't want addresses from 0.1.5
+
+        // Don't want addr from older versions unless seeding
+        if (pfrom->nVersion < 209)
             return true;
-        if (pfrom->nVersion < 209 && mapAddresses.size() > 1000) // don't want addr from 0.2.0 unless seeding
+        if (pfrom->nVersion < 31402 && mapAddresses.size() > 1000)
             return true;
         if (vAddr.size() > 1000)
             return error("message addr size() = %d", vAddr.size());
 
         // Store the new addresses
+        int64 nNow = GetAdjustedTime();
+        int64 nSince = nNow - 10 * 60;
         foreach(CAddress& addr, vAddr)
         {
             if (fShutdown)
@@ -2223,12 +2273,11 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             // ignore IPv6 for now, since it isn't implemented anyway
             if (!addr.IsIPv4())
                 continue;
-            addr.nTime = GetAdjustedTime() - 2 * 60 * 60;
-            if (pfrom->fGetAddr || vAddr.size() > 10)
-                addr.nTime -= 5 * 24 * 60 * 60;
-            AddAddress(addr);
+            if (addr.nTime <= 100000000 || addr.nTime > nNow + 10 * 60)
+                addr.nTime = nNow - 5 * 24 * 60 * 60;
+            AddAddress(addr, 2 * 60 * 60);
             pfrom->AddAddressKnown(addr);
-            if (!pfrom->fGetAddr && vAddr.size() <= 10 && addr.IsRoutable())
+            if (addr.nTime > nSince && !pfrom->fGetAddr && vAddr.size() <= 10 && addr.IsRoutable())
             {
                 // Relay to a limited number of other nodes
                 CRITICAL_BLOCK(cs_vNodes)
@@ -2243,6 +2292,8 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                     multimap<uint256, CNode*> mapMix;
                     foreach(CNode* pnode, vNodes)
                     {
+                        if (pnode->nVersion < 31402)
+                            continue;
                         unsigned int nPointer;
                         memcpy(&nPointer, &pnode, sizeof(nPointer));
                         uint256 hashKey = hashRand ^ nPointer;
@@ -2610,9 +2661,12 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         if (pto->nLastSend && GetTime() - pto->nLastSend > 30 * 60 && pto->vSend.empty())
             pto->PushMessage("ping");
 
+        // Resend wallet transactions that haven't gotten in a block yet
+        ResendWalletTransactions();
+
         // Address refresh broadcast
         static int64 nLastRebroadcast;
-        if (GetTime() - nLastRebroadcast > 24 * 60 * 60) // every 24 hours
+        if (GetTime() - nLastRebroadcast > 24 * 60 * 60)
         {
             nLastRebroadcast = GetTime();
             CRITICAL_BLOCK(cs_vNodes)
@@ -2624,13 +2678,42 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
                     // Rebroadcast our address
                     if (addrLocalHost.IsRoutable() && !fUseProxy)
-                        pnode->PushAddress(addrLocalHost);
+                    {
+                        CAddress addr(addrLocalHost);
+                        addr.nTime = GetAdjustedTime();
+                        pnode->PushAddress(addr);
+                    }
                 }
             }
         }
 
-        // Resend wallet transactions that haven't gotten in a block yet
-        ResendWalletTransactions();
+        // Clear out old addresses periodically so it's not too much work at once
+        static int64 nLastClear;
+        if (nLastClear == 0)
+            nLastClear = GetTime();
+        if (GetTime() - nLastClear > 10 * 60 && vNodes.size() >= 3)
+        {
+            nLastClear = GetTime();
+            CRITICAL_BLOCK(cs_mapAddresses)
+            {
+                CAddrDB addrdb;
+                int64 nSince = GetAdjustedTime() - 14 * 24 * 60 * 60;
+                for (map<vector<unsigned char>, CAddress>::iterator mi = mapAddresses.begin();
+                     mi != mapAddresses.end();)
+                {
+                    const CAddress& addr = (*mi).second;
+                    if (addr.nTime < nSince)
+                    {
+                        if (mapAddresses.size() < 1000 || GetTime() > nLastClear + 20)
+                            break;
+                        addrdb.EraseAddress(addr);
+                        mapAddresses.erase(mi++);
+                    }
+                    else
+                        mi++;
+                }
+            }
+        }
 
 
         //
@@ -2827,7 +2910,7 @@ void CallCPUID(int in, int& aret, int& cret)
         "mov %2, %%eax; " // in into eax
         "cpuid;"
         "mov %%eax, %0;" // eax into a
-        "mov %%ecx, %1;" // eax into c
+        "mov %%ecx, %1;" // ecx into c
         :"=r"(a),"=r"(c) /* output */
         :"r"(in) /* input */
         :"%eax","%ecx" /* clobbered register */
@@ -3013,42 +3096,97 @@ void BitcoinMiner()
         CRITICAL_BLOCK(cs_mapTransactions)
         {
             CTxDB txdb("r");
+
+            // Priority order to process transactions
+            multimap<double, CTransaction*> mapPriority;
+            for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi)
+            {
+                CTransaction& tx = (*mi).second;
+                if (tx.IsCoinBase() || !tx.IsFinal())
+                    continue;
+
+                double dPriority = 0;
+                foreach(const CTxIn& txin, tx.vin)
+                {
+                    // Read prev transaction
+                    CTransaction txPrev;
+                    CTxIndex txindex;
+                    if (!txPrev.ReadFromDisk(txdb, txin.prevout, txindex))
+                        continue;
+                    int64 nValueIn = txPrev.vout[txin.prevout.n].nValue;
+
+                    // Read block header
+                    int nConf = 0;
+                    CBlock block;
+                    if (block.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
+                    {
+                        map<uint256, CBlockIndex*>::iterator it = mapBlockIndex.find(block.GetHash());
+                        if (it != mapBlockIndex.end())
+                        {
+                            CBlockIndex* pindex = (*it).second;
+                            if (pindex->IsInMainChain())
+                                nConf = 1 + nBestHeight - pindex->nHeight;
+                        }
+                    }
+
+                    dPriority += (double)nValueIn * nConf;
+
+                    if (fDebug && mapArgs.count("-printpriority"))
+                        printf("priority     nValueIn=%-12I64d nConf=%-5d dPriority=%-20.1f\n", nValueIn, nConf, dPriority);
+                }
+
+                // Priority is sum(valuein * age) / txsize
+                dPriority /= ::GetSerializeSize(tx, SER_NETWORK);
+
+                mapPriority.insert(make_pair(-dPriority, &(*mi).second));
+
+                if (fDebug && mapArgs.count("-printpriority"))
+                    printf("priority %-20.1f %s\n%s\n", dPriority, tx.GetHash().ToString().substr(0,10).c_str(), tx.ToString().c_str());
+            }
+
+            // Collect transactions into block
             map<uint256, CTxIndex> mapTestPool;
-            vector<char> vfAlreadyAdded(mapTransactions.size());
             uint64 nBlockSize = 1000;
             int nBlockSigOps = 100;
             bool fFoundSomething = true;
             while (fFoundSomething)
             {
                 fFoundSomething = false;
-                unsigned int n = 0;
-                for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi, ++n)
+                for (multimap<double, CTransaction*>::iterator mi = mapPriority.begin(); mi != mapPriority.end();)
                 {
-                    if (vfAlreadyAdded[n])
-                        continue;
-                    CTransaction& tx = (*mi).second;
-                    if (tx.IsCoinBase() || !tx.IsFinal())
-                        continue;
+                    CTransaction& tx = *(*mi).second;
                     unsigned int nTxSize = ::GetSerializeSize(tx, SER_NETWORK);
                     if (nBlockSize + nTxSize >= MAX_BLOCK_SIZE_GEN)
+                    {
+                        mapPriority.erase(mi++);
                         continue;
+                    }
                     int nTxSigOps = tx.GetSigOpCount();
                     if (nBlockSigOps + nTxSigOps >= MAX_BLOCK_SIGOPS)
+                    {
+                        mapPriority.erase(mi++);
                         continue;
+                    }
 
                     // Transaction fee based on block size
                     int64 nMinFee = tx.GetMinFee(nBlockSize);
 
+                    // Connecting can fail due to dependency on other memory pool transactions
+                    // that aren't in the block yet, so keep trying in later passes
                     map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
                     if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), pindexPrev, nFees, false, true, nMinFee))
+                    {
+                        mi++;
                         continue;
+                    }
                     swap(mapTestPool, mapTestPoolTmp);
 
+                    // Added
                     pblock->vtx.push_back(tx);
                     nBlockSize += nTxSize;
                     nBlockSigOps += nTxSigOps;
-                    vfAlreadyAdded[n] = true;
                     fFoundSomething = true;
+                    mapPriority.erase(mi++);
                 }
             }
         }
@@ -3262,7 +3400,7 @@ int64 GetBalance()
 }
 
 
-bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
+bool SelectCoinsMinConf(int64 nTargetValue, int nConfMine, int nConfTheirs, set<CWalletTx*>& setCoinsRet)
 {
     setCoinsRet.clear();
 
@@ -3284,6 +3422,11 @@ bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
        {
             if (!pcoin->IsFinal() || pcoin->fSpent || !pcoin->IsConfirmed())
                 continue;
+
+            int nDepth = pcoin->GetDepthInMainChain();
+            if (nDepth < (pcoin->IsFromMe() ? nConfMine : nConfTheirs))
+                continue;
+
             int64 n = pcoin->GetCredit();
             if (n <= 0)
                 continue;
@@ -3368,19 +3511,25 @@ bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
     return true;
 }
 
-
-
-
-bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CReserveKey& reservekey, int64& nFeeRequiredRet)
+bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
 {
-    nFeeRequiredRet = 0;
+    return (SelectCoinsMinConf(nTargetValue, 1, 6, setCoinsRet) ||
+            SelectCoinsMinConf(nTargetValue, 1, 1, setCoinsRet) ||
+            SelectCoinsMinConf(nTargetValue, 0, 1, setCoinsRet));
+}
+
+
+
+
+bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CReserveKey& reservekey, int64& nFeeRet)
+{
     CRITICAL_BLOCK(cs_main)
     {
         // txdb must be opened before the mapWallet lock
         CTxDB txdb("r");
         CRITICAL_BLOCK(cs_mapWallet)
         {
-            int64 nFee = nTransactionFee;
+            nFeeRet = nTransactionFee;
             loop
             {
                 wtxNew.vin.clear();
@@ -3389,7 +3538,7 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CR
                 if (nValue < 0)
                     return false;
                 int64 nValueOut = nValue;
-                int64 nTotalValue = nValue + nFee;
+                int64 nTotalValue = nValue + nFeeRet;
 
                 // Choose coins to use
                 set<CWalletTx*> setCoins;
@@ -3449,13 +3598,16 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CR
                                 return false;
 
                 // Limit size
-                if (::GetSerializeSize(*(CTransaction*)&wtxNew, SER_NETWORK) >= MAX_BLOCK_SIZE_GEN/5)
+                unsigned int nBytes = ::GetSerializeSize(*(CTransaction*)&wtxNew, SER_NETWORK);
+                if (nBytes >= MAX_BLOCK_SIZE_GEN/5)
                     return false;
 
                 // Check that enough fee is included
-                if (nFee < wtxNew.GetMinFee())
+                int64 nPayFee = nTransactionFee * (1 + (int64)nBytes / 1000);
+                int64 nMinFee = wtxNew.GetMinFee();
+                if (nFeeRet < max(nPayFee, nMinFee))
                 {
-                    nFee = nFeeRequiredRet = wtxNew.GetMinFee();
+                    nFeeRet = max(nPayFee, nMinFee);
                     continue;
                 }
 

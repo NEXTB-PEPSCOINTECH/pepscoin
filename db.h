@@ -298,6 +298,7 @@ private:
     void operator=(const CAddrDB&);
 public:
     bool WriteAddress(const CAddress& addr);
+    bool EraseAddress(const CAddress& addr);
     bool LoadAddresses();
 };
 
@@ -432,6 +433,7 @@ protected:
     friend class CReserveKey;
 public:
     vector<unsigned char> GetKeyFromKeyPool();
+    int64 GetOldestKeyPoolTime();
 };
 
 bool LoadWallet(bool& fFirstRunRet);
