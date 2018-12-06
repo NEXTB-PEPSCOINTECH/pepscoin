@@ -282,15 +282,21 @@ bool error(const char* format, ...)
 
 void ParseString(const string& str, char c, vector<string>& v)
 {
-    unsigned int i1 = 0;
-    unsigned int i2;
-    do
+    if (str.empty())
+        return;
+    string::size_type i1 = 0;
+    string::size_type i2;
+    loop
     {
         i2 = str.find(c, i1);
+        if (i2 == str.npos)
+        {
+            v.push_back(str.substr(i1));
+            return;
+        }
         v.push_back(str.substr(i1, i2-i1));
         i1 = i2+1;
     }
-    while (i2 != str.npos);
 }
 
 
@@ -306,6 +312,12 @@ string FormatMoney(int64 n, bool fPlus)
     else if (fPlus && n > 0)
         str.insert((unsigned int)0, 1, '+');
     return str;
+}
+
+
+bool ParseMoney(const string& str, int64& nRet)
+{
+    return ParseMoney(str.c_str(), nRet);
 }
 
 bool ParseMoney(const char* pszIn, int64& nRet)
@@ -445,17 +457,17 @@ const char* wxGetTranslation(const char* pszEnglish)
             return (*mi).second;
 
         // wxWidgets translation
-        const char* pszTranslated = wxGetTranslation(wxString(pszEnglish, wxConvUTF8)).utf8_str();
+        wxString strTranslated = wxGetTranslation(wxString(pszEnglish, wxConvUTF8));
 
         // We don't cache unknown strings because caller might be passing in a
         // dynamic string and we would keep allocating memory for each variation.
-        if (strcmp(pszEnglish, pszTranslated) == 0)
+        if (strcmp(pszEnglish, strTranslated.utf8_str()) == 0)
             return pszEnglish;
 
         // Add to cache, memory doesn't need to be freed.  We only cache because
         // we must pass back a pointer to permanently allocated memory.
-        char* pszCached = new char[strlen(pszTranslated)+1];
-        strcpy(pszCached, pszTranslated);
+        char* pszCached = new char[strlen(strTranslated.utf8_str())+1];
+        strcpy(pszCached, strTranslated.utf8_str());
         mapCache[pszEnglish] = pszCached;
         return pszCached;
     }
