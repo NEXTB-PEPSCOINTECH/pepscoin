@@ -77,7 +77,6 @@ CDB::CDB(const char* pszFile, const char* pszMode) : pdb(NULL)
                              DB_INIT_MPOOL |
                              DB_INIT_TXN   |
                              DB_THREAD     |
-                             DB_PRIVATE    |
                              DB_RECOVER,
                              S_IRUSR | S_IWUSR);
             if (ret > 0)
@@ -466,7 +465,7 @@ bool CTxDB::LoadBlockIndex()
     CBlockIndex* pindexFork = NULL;
     for (CBlockIndex* pindex = pindexBest; pindex && pindex->pprev; pindex = pindex->pprev)
     {
-        if (pindex->nHeight < 74000 && !mapArgs.count("-checkblocks"))
+        if (pindex->nHeight < nBestHeight-2500 && !mapArgs.count("-checkblocks"))
             break;
         CBlock block;
         if (!block.ReadFromDisk(pindex))

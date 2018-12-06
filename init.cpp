@@ -10,7 +10,6 @@
 
 
 
-
 //////////////////////////////////////////////////////////////////////////////
 //
 // Shutdown
@@ -55,6 +54,11 @@ void Shutdown(void* parg)
         Sleep(100);
         ExitThread(0);
     }
+}
+
+void HandleSIGTERM(int)
+{
+    fRequestShutdown = true;
 }
 
 
@@ -130,6 +134,14 @@ bool AppInit2(int argc, char* argv[])
 #ifndef __WXMSW__
     umask(077);
 #endif
+#ifndef __WXMSW__
+    // Clean shutdown on SIGTERM
+    struct sigaction sa;
+    sa.sa_handler = HandleSIGTERM;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+#endif
 
     //
     // Parameters
@@ -191,7 +203,7 @@ bool AppInit2(int argc, char* argv[])
     if (!fDebug && !pszSetDataDir[0])
         ShrinkDebugFile();
     printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
-    printf("Bitcoin version %d.%d.%d%s beta\n", VERSION/10000, (VERSION/100)%100, VERSION%100, pszSubVer);
+    printf("Bitcoin version %s%s beta\n", FormatVersion(VERSION).c_str(), pszSubVer);
 #ifdef GUI
     printf("OS version %s\n", ((string)wxGetOsDescription()).c_str());
     printf("System default language is %d %s\n", g_locale.GetSystemLanguage(), ((string)g_locale.GetSysName()).c_str());

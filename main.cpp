@@ -487,17 +487,55 @@ void CWalletTx::AddSupportingTransactions(CTxDB& txdb)
 
 
 
+bool CTransaction::CheckTransaction() const
+{
+    // Basic checks that don't depend on any context
+    if (vin.empty() || vout.empty())
+        return error("CTransaction::CheckTransaction() : vin or vout empty");
+
+    // Size limits
+    if (::GetSerializeSize(*this, SER_NETWORK) > MAX_BLOCK_SIZE)
+        return error("CTransaction::CheckTransaction() : size limits failed");
+
+    // Check for negative or overflow output values
+    int64 nValueOut = 0;
+    foreach(const CTxOut& txout, vout)
+    {
+        if (txout.nValue < 0)
+            return error("CTransaction::CheckTransaction() : txout.nValue negative");
+        if (txout.nValue > MAX_MONEY)
+            return error("CTransaction::CheckTransaction() : txout.nValue too high");
+        nValueOut += txout.nValue;
+        if (!MoneyRange(nValueOut))
+            return error("CTransaction::CheckTransaction() : txout total out of range");
+    }
+
+    if (IsCoinBase())
+    {
+        if (vin[0].scriptSig.size() < 2 || vin[0].scriptSig.size() > 100)
+            return error("CTransaction::CheckTransaction() : coinbase script size");
+    }
+    else
+    {
+        foreach(const CTxIn& txin, vin)
+            if (txin.prevout.IsNull())
+                return error("CTransaction::CheckTransaction() : prevout is null");
+    }
+
+    return true;
+}
+
 bool CTransaction::AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs, bool* pfMissingInputs)
 {
     if (pfMissingInputs)
         *pfMissingInputs = false;
 
+    if (!CheckTransaction())
+        return error("AcceptToMemoryPool() : CheckTransaction failed");
+
     // Coinbase is only valid in a block, not as a loose transaction
     if (IsCoinBase())
         return error("AcceptToMemoryPool() : coinbase as individual tx");
-
-    if (!CheckTransaction())
-        return error("AcceptToMemoryPool() : CheckTransaction failed");
 
     // To help v0.1.5 clients who would see it as a negative number
     if ((int64)nLockTime > INT_MAX)
@@ -815,7 +853,7 @@ uint256 GetOrphanRoot(const CBlock* pblock)
     return pblock->GetHash();
 }
 
-int64 CBlock::GetBlockValue(int nHeight, int64 nFees) const
+int64 GetBlockValue(int nHeight, int64 nFees)
 {
     int64 nSubsidy = 50 * COIN;
 
@@ -1024,6 +1062,11 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
             if (!txindex.vSpent[prevout.n].IsNull())
                 return fMiner ? false : error("ConnectInputs() : %s prev tx already used at %s", GetHash().ToString().substr(0,6).c_str(), txindex.vSpent[prevout.n].ToString().c_str());
 
+            // Check for negative or overflow input values
+            nValueIn += txPrev.vout[prevout.n].nValue;
+            if (!MoneyRange(txPrev.vout[prevout.n].nValue) || !MoneyRange(nValueIn))
+                return error("ConnectInputs() : txin values out of range");
+
             // Mark outpoints as spent
             txindex.vSpent[prevout.n] = posThisTx;
 
@@ -1032,12 +1075,6 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
                 txdb.UpdateTxIndex(prevout.hash, txindex);
             else if (fMiner)
                 mapTestPool[prevout.hash] = txindex;
-
-            nValueIn += txPrev.vout[prevout.n].nValue;
-
-            // Check for negative or overflow input values
-            if (!MoneyRange(txPrev.vout[prevout.n].nValue) || !MoneyRange(nValueIn))
-                return error("ConnectInputs() : txin values out of range");
         }
 
         if (nValueIn < GetValueOut())
@@ -1374,8 +1411,12 @@ bool CBlock::CheckBlock() const
     // that can be verified before saving an orphan block.
 
     // Size limits
-    if (vtx.empty() || vtx.size() > MAX_SIZE || ::GetSerializeSize(*this, SER_NETWORK) > MAX_SIZE)
+    if (vtx.empty() || vtx.size() > MAX_BLOCK_SIZE || ::GetSerializeSize(*this, SER_NETWORK) > MAX_BLOCK_SIZE)
         return error("CheckBlock() : size limits failed");
+
+    // Check proof of work matches claimed amount
+    if (!CheckProofOfWork(GetHash(), nBits))
+        return error("CheckBlock() : proof of work failed");
 
     // Check timestamp
     if (GetBlockTime() > GetAdjustedTime() + 2 * 60 * 60)
@@ -1393,9 +1434,9 @@ bool CBlock::CheckBlock() const
         if (!tx.CheckTransaction())
             return error("CheckBlock() : CheckTransaction failed");
 
-    // Check proof of work matches claimed amount
-    if (!CheckProofOfWork(GetHash(), nBits))
-        return error("CheckBlock() : proof of work failed");
+    // Check that it's not full of nonstandard transactions
+    if (GetSigOpCount() > MAX_BLOCK_SIGOPS)
+        return error("CheckBlock() : too many nonstandard transactions");
 
     // Check merkleroot
     if (hashMerkleRoot != BuildMerkleTree())
@@ -1418,13 +1459,9 @@ bool CBlock::AcceptBlock()
     CBlockIndex* pindexPrev = (*mi).second;
     int nHeight = pindexPrev->nHeight+1;
 
-    // Check size
-    if (nHeight > 79400 && ::GetSerializeSize(*this, SER_NETWORK) > MAX_BLOCK_SIZE)
-        return error("AcceptBlock() : over size limit");
-
-    // Check that it's not full of nonstandard transactions
-    if (nHeight > 79400 && GetSigOpCount() > MAX_BLOCK_SIGOPS)
-        return error("AcceptBlock() : too many nonstandard transactions");
+    // Check proof of work
+    if (nBits != GetNextWorkRequired(pindexPrev))
+        return error("AcceptBlock() : incorrect proof of work");
 
     // Check timestamp against prev
     if (GetBlockTime() <= pindexPrev->GetMedianTimePast())
@@ -1434,10 +1471,6 @@ bool CBlock::AcceptBlock()
     foreach(const CTransaction& tx, vtx)
         if (!tx.IsFinal(nHeight, GetBlockTime()))
             return error("AcceptBlock() : contains a non-final transaction");
-
-    // Check proof of work
-    if (nBits != GetNextWorkRequired(pindexPrev))
-        return error("AcceptBlock() : incorrect proof of work");
 
     // Check that the block chain matches the known block chain up to a checkpoint
     if ((nHeight == 11111 && hash != uint256("0x0000000069e244f73d78e8fd29ba2fd2ed618bd6fa2ee92559f542fdb26e7c1d")) ||
@@ -2392,13 +2425,11 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
     else if (strCommand == "getaddr")
     {
-        // This includes all nodes that are currently online,
-        // since they rebroadcast an addr every 24 hours
+        // Nodes rebroadcast an addr every 24 hours
         pfrom->vAddrToSend.clear();
-        int64 nSince = GetAdjustedTime() - 12 * 60 * 60; // in the last 12 hours
+        int64 nSince = GetAdjustedTime() - 6 * 60 * 60; // in the last 6 hours
         CRITICAL_BLOCK(cs_mapAddresses)
         {
-            unsigned int nSize = mapAddresses.size();
             foreach(const PAIRTYPE(vector<unsigned char>, CAddress)& item, mapAddresses)
             {
                 if (fShutdown)
@@ -2416,6 +2447,12 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         uint256 hashReply;
         CWalletTx order;
         vRecv >> hashReply >> order;
+
+        if (!mapArgs.count("-allowreceivebyip") || mapArgs["-allowreceivebyip"] == "0")
+        {
+            pfrom->PushMessage("reply", hashReply, (int)2, string(""));
+            return true;
+        }
 
         /// we have a chance to check the order here
 
@@ -2436,6 +2473,12 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         CWalletTx wtxNew;
         vRecv >> hashReply >> wtxNew;
         wtxNew.fFromMe = false;
+
+        if (!mapArgs.count("-allowreceivebyip") || mapArgs["-allowreceivebyip"] == "0")
+        {
+            pfrom->PushMessage("reply", hashReply, (int)2);
+            return true;
+        }
 
         // Broadcast
         if (!wtxNew.AcceptWalletTransaction())
@@ -2738,6 +2781,68 @@ void ThreadBitcoinMiner(void* parg)
     printf("ThreadBitcoinMiner exiting, %d threads remaining\n", vnThreadsRunning[3]);
 }
 
+#if defined(__GNUC__) && defined(CRYPTOPP_X86_ASM_AVAILABLE)
+void CallCPUID(int in, int& aret, int& cret)
+{
+    int a, c;
+    asm (
+        "mov %2, %%eax; " // in into eax
+        "cpuid;"
+        "mov %%eax, %0;" // eax into a
+        "mov %%ecx, %1;" // eax into c
+        :"=r"(a),"=r"(c) /* output */
+        :"r"(in) /* input */
+        :"%eax","%ecx" /* clobbered register */
+    );
+    aret = a;
+    cret = c;
+}
+
+bool Detect128BitSSE2()
+{
+    int a, c, nBrand;
+    CallCPUID(0, a, nBrand);
+    bool fIntel = (nBrand == 0x6c65746e); // ntel
+    bool fAMD = (nBrand == 0x444d4163); // cAMD
+
+    struct
+    {
+        unsigned int nStepping : 4;
+        unsigned int nModel : 4;
+        unsigned int nFamily : 4;
+        unsigned int nProcessorType : 2;
+        unsigned int nUnused : 2;
+        unsigned int nExtendedModel : 4;
+        unsigned int nExtendedFamily : 8;
+    }
+    cpu;
+    CallCPUID(1, a, c);
+    memcpy(&cpu, &a, sizeof(cpu));
+    int nFamily = cpu.nExtendedFamily + cpu.nFamily;
+    int nModel = cpu.nExtendedModel*16 + cpu.nModel;
+
+    // We need Intel Nehalem or AMD K10 or better for 128bit SSE2
+    // Nehalem = i3/i5/i7 and some Xeon
+    // K10 = Opterons with 4 or more cores, Phenom, Phenom II, Athlon II
+    //  Intel Core i5  family 6, model 26 or 30
+    //  Intel Core i7  family 6, model 26 or 30
+    //  Intel Core i3  family 6, model 37
+    //  AMD Phenom    family 16, model 10
+    bool fUseSSE2 = ((fIntel && nFamily * 10000 + nModel >=  60026) ||
+                     (fAMD   && nFamily * 10000 + nModel >= 160010));
+
+    static bool fPrinted;
+    if (!fPrinted)
+    {
+        fPrinted = true;
+        printf("CPUID %08x family %d, model %d, stepping %d, fUseSSE2=%d\n", nBrand, nFamily, nModel, cpu.nStepping, fUseSSE2);
+    }
+    return fUseSSE2;
+}
+#else
+bool Detect128BitSSE2() { return false; }
+#endif
+
 int FormatHashBlocks(void* pbuffer, unsigned int len)
 {
     unsigned char* pdata = (unsigned char*)pbuffer;
@@ -2764,8 +2869,40 @@ inline void SHA256Transform(void* pstate, void* pinput, const void* pinit)
     CryptoPP::SHA256::Transform((CryptoPP::word32*)pstate, (CryptoPP::word32*)pinput);
 }
 
-static const int NPAR = 32;
-extern void Double_BlockSHA256(const void* pin, void* pout, const void* pinit, unsigned int hash[8][NPAR], const void* init2);
+//
+// ScanHash scans nonces looking for a hash with at least some zero bits.
+// It operates on big endian data.  Caller does the byte reversing.
+// All input buffers are 16-byte aligned.  nNonce is usually preserved
+// between calls, but periodically or if nNonce is above 0xff000000,
+// the block is rebuilt and nNonce starts over at zero.
+//
+unsigned int ScanHash_CryptoPP(char* pmidstate, char* pblock, char* phash1, char* phash, unsigned int& nHashesDone)
+{
+    unsigned int& nNonce = *(unsigned int*)(pblock + 12);
+    for (;;)
+    {
+        // Crypto++ SHA-256
+        // Hash pblock using pmidstate as the starting state into
+        // preformatted buffer phash1, then hash phash1 into phash
+        nNonce++;
+        SHA256Transform(phash1, pblock, pmidstate);
+        SHA256Transform(phash, phash1, pSHA256InitState);
+
+        // Return the nonce if the hash has at least some zero bits,
+        // caller will check if it has enough to reach the target
+        if (((unsigned short*)phash)[14] == 0)
+            return nNonce;
+
+        // If nothing found after trying for a while, return -1
+        if ((nNonce & 0xffff) == 0)
+        {
+            nHashesDone = 0xffff+1;
+            return -1;
+        }
+    }
+}
+
+extern unsigned int ScanHash_4WaySSE2(char* pmidstate, char* pblock, char* phash1, char* phash, unsigned int& nHashesDone);
 
 
 
@@ -2774,6 +2911,9 @@ void BitcoinMiner()
 {
     printf("BitcoinMiner started\n");
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
+    bool f4WaySSE2 = Detect128BitSSE2();
+    if (mapArgs.count("-4way"))
+        f4WaySSE2 = (mapArgs["-4way"] != "0");
 
     CKey key;
     key.MakeNewKey();
@@ -2818,7 +2958,7 @@ void BitcoinMiner()
         // Add our coinbase tx as first transaction
         pblock->vtx.push_back(txNew);
 
-        // Collect the latest transactions into the block
+        // Collect memory pool transactions into the block
         int64 nFees = 0;
         CRITICAL_BLOCK(cs_main)
         CRITICAL_BLOCK(cs_mapTransactions)
@@ -2826,9 +2966,9 @@ void BitcoinMiner()
             CTxDB txdb("r");
             map<uint256, CTxIndex> mapTestPool;
             vector<char> vfAlreadyAdded(mapTransactions.size());
-            bool fFoundSomething = true;
-            uint64 nBlockSize = 10000;
+            uint64 nBlockSize = 1000;
             int nBlockSigOps = 100;
+            bool fFoundSomething = true;
             while (fFoundSomething)
             {
                 fFoundSomething = false;
@@ -2841,7 +2981,7 @@ void BitcoinMiner()
                     if (tx.IsCoinBase() || !tx.IsFinal())
                         continue;
                     unsigned int nTxSize = ::GetSerializeSize(tx, SER_NETWORK);
-                    if (nBlockSize + nTxSize >= MAX_BLOCK_SIZE)
+                    if (nBlockSize + nTxSize >= MAX_BLOCK_SIZE_GEN)
                         continue;
                     int nTxSigOps = tx.GetSigOpCount();
                     if (nBlockSigOps + nTxSigOps >= MAX_BLOCK_SIGOPS)
@@ -2864,7 +3004,7 @@ void BitcoinMiner()
             }
         }
         pblock->nBits = nBits;
-        pblock->vtx[0].vout[0].nValue = pblock->GetBlockValue(pindexPrev->nHeight+1, nFees);
+        pblock->vtx[0].vout[0].nValue = GetBlockValue(pindexPrev->nHeight+1, nFees);
         printf("Running BitcoinMiner with %d transactions in block\n", pblock->vtx.size());
 
 
@@ -2913,53 +3053,34 @@ void BitcoinMiner()
         //
         // Search
         //
-        bool f4WaySSE2 = mapArgs.count("-4way");
         int64 nStart = GetTime();
         uint256 hashTarget = CBigNum().SetCompact(pblock->nBits).getuint256();
         uint256 hashbuf[2];
         uint256& hash = *alignup<16>(hashbuf);
         loop
         {
+            unsigned int nHashesDone = 0;
+            unsigned int nNonceFound;
+
 #ifdef FOURWAYSSE2
             if (f4WaySSE2)
-            {
-                // tcatm's 4-way SSE2 SHA-256
-                tmp.block.nNonce += NPAR;
-                unsigned int thashbuf[9][NPAR];
-                unsigned int (&thash)[9][NPAR] = *alignup<16>(&thashbuf);
-                Double_BlockSHA256((char*)&tmp.block + 64, &tmp.hash1, &midstate, thash, pSHA256InitState);
-                ((unsigned short*)&hash)[14] = 0xffff;
-                for (int j = 0; j < NPAR; j++)
-                {
-                    if (thash[7][j] == 0)
-                    {
-                        for (int i = 0; i < sizeof(hash)/4; i++)
-                            ((unsigned int*)&hash)[i] = thash[i][j];
-                        pblock->nNonce = ByteReverse(tmp.block.nNonce + j);
-                    }
-                }
-            }
+                // tcatm's 4-way 128-bit SSE2 SHA-256
+                nNonceFound = ScanHash_4WaySSE2((char*)&midstate, (char*)&tmp.block + 64, (char*)&tmp.hash1, (char*)&hash, nHashesDone);
             else
 #endif
-            {
                 // Crypto++ SHA-256
-                tmp.block.nNonce++;
-                SHA256Transform(&tmp.hash1, (char*)&tmp.block + 64, &midstate);
-                SHA256Transform(&hash, &tmp.hash1, pSHA256InitState);
-            }
+                nNonceFound = ScanHash_CryptoPP((char*)&midstate, (char*)&tmp.block + 64, (char*)&tmp.hash1, (char*)&hash, nHashesDone);
 
-            if (((unsigned short*)&hash)[14] == 0)
+            // Check if something found
+            if (nNonceFound != -1)
             {
-                // Byte swap the result after preliminary check
                 for (int i = 0; i < sizeof(hash)/4; i++)
                     ((unsigned int*)&hash)[i] = ByteReverse(((unsigned int*)&hash)[i]);
 
                 if (hash <= hashTarget)
                 {
-#ifdef FOURWAYSSE2
-                    if (!f4WaySSE2)
-#endif
-                        pblock->nNonce = ByteReverse(tmp.block.nNonce);
+                    // Found a solution
+                    pblock->nNonce = ByteReverse(nNonceFound);
                     assert(hash == pblock->GetHash());
 
                         //// debug print
@@ -2995,62 +3116,57 @@ void BitcoinMiner()
                 }
             }
 
-            // Update nTime every few seconds
-            const unsigned int nMask = 0xffff;
-            const int nHashesPerCycle = (nMask+1);
-            if ((tmp.block.nNonce & nMask) == 0)
+            // Meter hashes/sec
+            static int64 nHashCounter;
+            if (nHPSTimerStart == 0)
             {
-                // Meter hashes/sec
-                static int nCycleCounter;
-                if (nHPSTimerStart == 0)
+                nHPSTimerStart = GetTimeMillis();
+                nHashCounter = 0;
+            }
+            else
+                nHashCounter += nHashesDone;
+            if (GetTimeMillis() - nHPSTimerStart > 4000)
+            {
+                static CCriticalSection cs;
+                CRITICAL_BLOCK(cs)
                 {
-                    nHPSTimerStart = GetTimeMillis();
-                    nCycleCounter = 0;
-                }
-                else
-                    nCycleCounter++;
-                if (GetTimeMillis() - nHPSTimerStart > 4000)
-                {
-                    static CCriticalSection cs;
-                    CRITICAL_BLOCK(cs)
+                    if (GetTimeMillis() - nHPSTimerStart > 4000)
                     {
-                        if (GetTimeMillis() - nHPSTimerStart > 4000)
+                        dHashesPerSec = 1000.0 * nHashCounter / (GetTimeMillis() - nHPSTimerStart);
+                        nHPSTimerStart = GetTimeMillis();
+                        nHashCounter = 0;
+                        string strStatus = strprintf("    %.0f khash/s", dHashesPerSec/1000.0);
+                        UIThreadCall(bind(CalledSetStatusBar, strStatus, 0));
+                        static int64 nLogTime;
+                        if (GetTime() - nLogTime > 30 * 60)
                         {
-                            dHashesPerSec = 1000.0 * nHashesPerCycle * nCycleCounter / (GetTimeMillis() - nHPSTimerStart);
-                            nHPSTimerStart = GetTimeMillis();
-                            nCycleCounter = 0;
-                            string strStatus = strprintf("    %.0f khash/s", dHashesPerSec/1000.0);
-                            UIThreadCall(bind(CalledSetStatusBar, strStatus, 0));
-                            static int64 nLogTime;
-                            if (GetTime() - nLogTime > 30 * 60)
-                            {
-                                nLogTime = GetTime();
-                                printf("%s ", DateTimeStrFormat("%x %H:%M", GetTime()).c_str());
-                                printf("hashmeter %3d CPUs %6.0f khash/s\n", vnThreadsRunning[3], dHashesPerSec/1000.0);
-                            }
+                            nLogTime = GetTime();
+                            printf("%s ", DateTimeStrFormat("%x %H:%M", GetTime()).c_str());
+                            printf("hashmeter %3d CPUs %6.0f khash/s\n", vnThreadsRunning[3], dHashesPerSec/1000.0);
                         }
                     }
                 }
-
-                // Check for stop or if block needs to be rebuilt
-                if (fShutdown)
-                    return;
-                if (!fGenerateBitcoins)
-                    return;
-                if (fLimitProcessors && vnThreadsRunning[3] > nLimitProcessors)
-                    return;
-                if (vNodes.empty())
-                    break;
-                if (tmp.block.nNonce == 0)
-                    break;
-                if (nTransactionsUpdated != nTransactionsUpdatedLast && GetTime() - nStart > 60)
-                    break;
-                if (pindexPrev != pindexBest)
-                    break;
-
-                pblock->nTime = max(pindexPrev->GetMedianTimePast()+1, GetAdjustedTime());
-                tmp.block.nTime = ByteReverse(pblock->nTime);
             }
+
+            // Check for stop or if block needs to be rebuilt
+            if (fShutdown)
+                return;
+            if (!fGenerateBitcoins)
+                return;
+            if (fLimitProcessors && vnThreadsRunning[3] > nLimitProcessors)
+                return;
+            if (vNodes.empty())
+                break;
+            if (tmp.block.nNonce >= 0xff000000)
+                break;
+            if (nTransactionsUpdated != nTransactionsUpdatedLast && GetTime() - nStart > 60)
+                break;
+            if (pindexPrev != pindexBest)
+                break;
+
+            // Update nTime every few seconds
+            pblock->nTime = max(pindexPrev->GetMedianTimePast()+1, GetAdjustedTime());
+            tmp.block.nTime = ByteReverse(pblock->nTime);
         }
     }
 }
@@ -3090,6 +3206,8 @@ int64 GetBalance()
             CWalletTx* pcoin = &(*it).second;
             if (!pcoin->IsFinal() || pcoin->fSpent)
                 continue;
+            if (pcoin->GetDepthInMainChain() < 1 && pcoin->GetDebit() <= 0)
+                continue;
             nTotal += pcoin->GetCredit(true);
         }
     }
@@ -3098,11 +3216,6 @@ int64 GetBalance()
     return nTotal;
 }
 
-
-int GetRandInt(int nMax)
-{
-    return GetRand(nMax);
-}
 
 bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
 {
@@ -3125,6 +3238,8 @@ bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
        foreach(CWalletTx* pcoin, vCoins)
        {
             if (!pcoin->IsFinal() || pcoin->fSpent)
+                continue;
+            if (pcoin->GetDepthInMainChain() < 1 && pcoin->GetDebit() <= 0)
                 continue;
             int64 n = pcoin->GetCredit();
             if (n <= 0)
@@ -3247,7 +3362,8 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CK
                     wtxNew.vout.push_back(CTxOut(nValueOut, scriptPubKey));
 
                 // Fill a vout back to self with any change
-                if (nValueIn > nTotalValue)
+                int64 nChange = nValueIn - nTotalValue;
+                if (nChange >= CENT)
                 {
                     // Note: We use a new key here to keep it from being obvious which side is the change.
                     //  The drawback is that by not reusing a previous key, the change may be lost if a
@@ -3266,7 +3382,7 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CK
                         scriptChange.SetBitcoinAddress(keyRet.GetPubKey());
                     else
                         scriptChange << keyRet.GetPubKey() << OP_CHECKSIG;
-                    wtxNew.vout.push_back(CTxOut(nValueIn - nTotalValue, scriptChange));
+                    wtxNew.vout.push_back(CTxOut(nChange, scriptChange));
                 }
 
                 // Fill a vout to the payee
@@ -3286,6 +3402,10 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CK
                         if (pcoin->vout[nOut].IsMine())
                             if (!SignSignature(*pcoin, wtxNew, nIn++))
                                 return false;
+
+                // Limit size
+                if (::GetSerializeSize(*(CTransaction*)&wtxNew, SER_NETWORK) >= MAX_BLOCK_SIZE_GEN/5)
+                    return false;
 
                 // Check that enough fee is included
                 if (nFee < wtxNew.GetMinFee())
