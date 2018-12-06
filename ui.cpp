@@ -1132,7 +1132,7 @@ void CMainFrame::OnButtonNew(wxCommandEvent& event)
     // Ask name
     CGetTextFromUserDialog dialog(this,
         _("New Receiving Address"),
-        _("It's good policy to use a new address for each payment you receive.\n\nLabel"),
+        _("You should use a new address for each payment you receive.\n\nLabel"),
         "");
     if (!dialog.ShowModal())
         return;
@@ -1614,6 +1614,7 @@ void COptionsDialog::OnButtonApply(wxCommandEvent& event)
 CAboutDialog::CAboutDialog(wxWindow* parent) : CAboutDialogBase(parent)
 {
     m_staticTextVersion->SetLabel(strprintf(_("version %d.%d.%d beta"), VERSION/10000, (VERSION/100)%100, VERSION%100));
+    //m_staticTextVersion->SetLabel(strprintf(_("version %d.%d.%d%s beta"), VERSION/10000, (VERSION/100)%100, VERSION%100, pszSubVer));
 
     // Change (c) into UTF-8 or ANSI copyright symbol
     wxString str = m_staticTextMain->GetLabel();
@@ -2372,7 +2373,7 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
         // Ask name
         CGetTextFromUserDialog dialog(this,
             _("New Receiving Address"),
-            _("It's good policy to use a new address for each payment you receive.\n\nLabel"),
+            _("You should use a new address for each payment you receive.\n\nLabel"),
             "");
         if (!dialog.ShowModal())
             return;
