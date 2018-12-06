@@ -813,7 +813,7 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
             // Read txindex
             CTxIndex txindex;
             bool fFound = true;
-            if (fMiner && mapTestPool.count(prevout.hash))
+            if ((fBlock || fMiner) && mapTestPool.count(prevout.hash))
             {
                 // Get txindex from current proposed changes
                 txindex = mapTestPool[prevout.hash];
@@ -873,12 +873,7 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
             txindex.vSpent[prevout.n] = posThisTx;
 
             // Write back
-            if (fBlock)
-            {
-                if (!txdb.UpdateTxIndex(prevout.hash, txindex))
-                    return error("ConnectInputs() : UpdateTxIndex failed");
-            }
-            else if (fMiner)
+            if (fBlock || fMiner)
             {
                 mapTestPool[prevout.hash] = txindex;
             }
@@ -900,9 +895,8 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
 
     if (fBlock)
     {
-        // Add transaction to disk index
-        if (!txdb.AddTxIndex(*this, posThisTx, pindexBlock->nHeight))
-            return error("ConnectInputs() : AddTxPos failed");
+        // Add transaction to changes
+        mapTestPool[GetHash()] = CTxIndex(posThisTx, vout.size());
     }
     else if (fMiner)
     {
@@ -991,15 +985,21 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex)
     //// issue here: it doesn't know the version
     unsigned int nTxPos = pindex->nBlockPos + ::GetSerializeSize(CBlock(), SER_DISK) - 1 + GetSizeOfCompactSize(vtx.size());
 
-    map<uint256, CTxIndex> mapUnused;
+    map<uint256, CTxIndex> mapQueuedChanges;
     int64 nFees = 0;
     BOOST_FOREACH(CTransaction& tx, vtx)
     {
         CDiskTxPos posThisTx(pindex->nFile, pindex->nBlockPos, nTxPos);
         nTxPos += ::GetSerializeSize(tx, SER_DISK);
 
-        if (!tx.ConnectInputs(txdb, mapUnused, posThisTx, pindex, nFees, true, false))
+        if (!tx.ConnectInputs(txdb, mapQueuedChanges, posThisTx, pindex, nFees, true, false))
             return false;
+    }
+    // Write queued txindex changes
+    for (map<uint256, CTxIndex>::iterator mi = mapQueuedChanges.begin(); mi != mapQueuedChanges.end(); ++mi)
+    {
+        if (!txdb.UpdateTxIndex((*mi).first, (*mi).second))
+            return error("ConnectBlock() : UpdateTxIndex failed");
     }
 
     if (vtx[0].GetValueOut() > GetBlockValue(pindex->nHeight, nFees))
@@ -2798,16 +2798,17 @@ CBlock* CreateNewBlock(CReserveKey& reservekey)
 }
 
 
-void IncrementExtraNonce(CBlock* pblock, CBlockIndex* pindexPrev, unsigned int& nExtraNonce, int64& nPrevTime)
+void IncrementExtraNonce(CBlock* pblock, CBlockIndex* pindexPrev, unsigned int& nExtraNonce)
 {
     // Update nExtraNonce
-    int64 nNow = max(pindexPrev->GetMedianTimePast()+1, GetAdjustedTime());
-    if (++nExtraNonce >= 0x7f && nNow > nPrevTime+1)
+    static uint256 hashPrevBlock;
+    if (hashPrevBlock != pblock->hashPrevBlock)
     {
-        nExtraNonce = 1;
-        nPrevTime = nNow;
+        nExtraNonce = 0;
+        hashPrevBlock = pblock->hashPrevBlock;
     }
-    pblock->vtx[0].vin[0].scriptSig = CScript() << pblock->nBits << CBigNum(nExtraNonce);
+    ++nExtraNonce;
+    pblock->vtx[0].vin[0].scriptSig = CScript() << pblock->nTime << CBigNum(nExtraNonce);
     pblock->hashMerkleRoot = pblock->BuildMerkleTree();
 }
 
@@ -2905,7 +2906,6 @@ void static BitcoinMiner(CWallet *pwallet)
     // Each thread has its own key and counter
     CReserveKey reservekey(pwallet);
     unsigned int nExtraNonce = 0;
-    int64 nPrevTime = 0;
 
     while (fGenerateBitcoins)
     {
@@ -2932,7 +2932,7 @@ void static BitcoinMiner(CWallet *pwallet)
         auto_ptr<CBlock> pblock(CreateNewBlock(reservekey));
         if (!pblock.get())
             return;
-        IncrementExtraNonce(pblock.get(), pindexPrev, nExtraNonce, nPrevTime);
+        IncrementExtraNonce(pblock.get(), pindexPrev, nExtraNonce);
 
         printf("Running BitcoinMiner with %d transactions in block\n", pblock->vtx.size());
 
