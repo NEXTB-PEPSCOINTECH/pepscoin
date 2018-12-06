@@ -1477,7 +1477,10 @@ bool CheckDiskSpace(int64 nAdditionalBytes)
     if (nFreeBytesAvailable < (int64)15000000 + nAdditionalBytes)
     {
         fShutdown = true;
+        printf("***  %s***\n", _("Warning: Disk space is low  "));
+#if wxUSE_GUI
         ThreadSafeMessageBox(_("Warning: Disk space is low  "), "Bitcoin", wxOK | wxICON_EXCLAMATION);
+#endif
         CreateThread(Shutdown, NULL);
         return false;
     }
@@ -2541,13 +2544,13 @@ void BlockSHA256(const void* pin, unsigned int nBlocks, void* pout)
 void BitcoinMiner()
 {
     printf("BitcoinMiner started\n");
+    SetThreadPriority(THREAD_PRIORITY_LOWEST);
 
     CKey key;
     key.MakeNewKey();
     CBigNum bnExtraNonce = 0;
     while (fGenerateBitcoins)
     {
-        SetThreadPriority(THREAD_PRIORITY_LOWEST);
         Sleep(50);
         if (fShutdown)
             return;
@@ -2607,6 +2610,9 @@ void BitcoinMiner()
                     CTransaction& tx = (*mi).second;
                     if (tx.IsCoinBase() || !tx.IsFinal())
                         continue;
+                    unsigned int nTxSize = ::GetSerializeSize(tx, SER_NETWORK);
+                    if (nBlockSize + nTxSize >= MAX_BLOCK_SIZE - 10000)
+                        continue;
 
                     // Transaction fee based on block size
                     int64 nMinFee = tx.GetMinFee(nBlockSize);
@@ -2617,7 +2623,7 @@ void BitcoinMiner()
                     swap(mapTestPool, mapTestPoolTmp);
 
                     pblock->vtx.push_back(tx);
-                    nBlockSize += ::GetSerializeSize(tx, SER_NETWORK);
+                    nBlockSize += nTxSize;
                     vfAlreadyAdded[n] = true;
                     fFoundSomething = true;
                 }
@@ -2713,25 +2719,32 @@ void BitcoinMiner()
             if ((++tmp.block.nNonce & nMask) == 0)
             {
                 // Meter hashes/sec
-                static int64 nHashCounter;
-                static int64 nLastTick;
-                if (nLastTick == 0)
-                    nLastTick = GetTimeMillis();
+                static int64 nTimerStart;
+                static int nHashCounter;
+                if (nTimerStart == 0)
+                    nTimerStart = GetTimeMillis();
                 else
-                    nHashCounter += nMask + 1;
-                if (GetTimeMillis() - nLastTick > 4000)
+                    nHashCounter++;
+                if (GetTimeMillis() - nTimerStart > 4000)
                 {
-                    double dHashesPerSec = 1000.0 * nHashCounter / (GetTimeMillis() - nLastTick);
-                    nLastTick = GetTimeMillis();
-                    nHashCounter = 0;
-                    string strStatus = strprintf("    %.0f khash/s", dHashesPerSec/1000.0);
-                    UIThreadCall(bind(CalledSetStatusBar, strStatus, 0));
-                    static int64 nLogTime;
-                    if (GetTime() - nLogTime > 30 * 60)
+                    static CCriticalSection cs;
+                    CRITICAL_BLOCK(cs)
                     {
-                        nLogTime = GetTime();
-                        printf("%s ", DateTimeStrFormat("%x %H:%M", GetTime()).c_str());
-                        printf("hashmeter %3d CPUs %6.0f khash/s\n", vnThreadsRunning[3], dHashesPerSec/1000.0);
+                        if (GetTimeMillis() - nTimerStart > 4000)
+                        {
+                            double dHashesPerSec = 1000.0 * (nMask+1) * nHashCounter / (GetTimeMillis() - nTimerStart);
+                            nTimerStart = GetTimeMillis();
+                            nHashCounter = 0;
+                            string strStatus = strprintf("    %.0f khash/s", dHashesPerSec/1000.0);
+                            UIThreadCall(bind(CalledSetStatusBar, strStatus, 0));
+                            static int64 nLogTime;
+                            if (GetTime() - nLogTime > 30 * 60)
+                            {
+                                nLogTime = GetTime();
+                                printf("%s ", DateTimeStrFormat("%x %H:%M", GetTime()).c_str());
+                                printf("hashmeter %3d CPUs %6.0f khash/s\n", vnThreadsRunning[3], dHashesPerSec/1000.0);
+                            }
+                        }
                     }
                 }
 
