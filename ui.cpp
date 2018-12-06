@@ -1171,7 +1171,7 @@ void CMainFrame::OnButtonNew(wxCommandEvent& event)
     string strName = dialog.GetValue();
 
     // Generate new key
-    string strAddress = PubKeyToAddress(CWalletDB().GetKeyFromKeyPool());
+    string strAddress = PubKeyToAddress(GetKeyFromKeyPool());
 
     // Save
     SetAddressBookName(strAddress, strName);
@@ -1631,6 +1631,9 @@ COptionsDialog::COptionsDialog(wxWindow* parent) : COptionsDialogBase(parent)
     //m_listBox->Append(_("Test 2"));
     m_listBox->SetSelection(0);
     SelectPage(0);
+#ifndef __WXMSW__
+    SetSize(1.0 * GetSize().GetWidth(), 1.2 * GetSize().GetHeight());
+#endif
 #if defined(__WXGTK__) || defined(__WXMAC_OSX__)
     m_checkBoxStartOnSystemStartup->SetLabel(_("&Start Bitcoin on window system startup"));
     if (!mapArgs.count("-minimizetotray"))
@@ -2575,7 +2578,7 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
         strName = dialog.GetValue();
 
         // Generate new key
-        strAddress = PubKeyToAddress(CWalletDB().GetKeyFromKeyPool());
+        strAddress = PubKeyToAddress(GetKeyFromKeyPool());
     }
 
     // Add to list and select it

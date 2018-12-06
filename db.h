@@ -11,6 +11,8 @@ class CUser;
 class CReview;
 class CAddress;
 class CWalletTx;
+class CAccount;
+class CAccountingEntry;
 
 extern map<string, string> mapAddressBook;
 extern CCriticalSection cs_mapAddressBook;
@@ -24,6 +26,8 @@ extern DbEnv dbenv;
 
 
 extern void DBFlush(bool fShutdown);
+extern vector<unsigned char> GetKeyFromKeyPool();
+extern int64 GetOldestKeyPoolTime();
 
 
 
@@ -341,7 +345,9 @@ public:
 class CWalletDB : public CDB
 {
 public:
-    CWalletDB(const char* pszMode="r+") : CDB("wallet.dat", pszMode) { }
+    CWalletDB(const char* pszMode="r+") : CDB("wallet.dat", pszMode)
+    {
+    }
 private:
     CWalletDB(const CWalletDB&);
     void operator=(const CWalletDB&);
@@ -425,15 +431,19 @@ public:
         return Write(make_pair(string("setting"), strKey), value);
     }
 
+    bool ReadAccount(const string& strAccount, CAccount& account);
+    bool WriteAccount(const string& strAccount, const CAccount& account);
+    bool WriteAccountingEntry(const string& strAccount, const CAccountingEntry& acentry);
+    int64 GetAccountCreditDebit(const string& strAccount);
+
     bool LoadWallet();
 protected:
     void ReserveKeyFromKeyPool(int64& nIndex, CKeyPool& keypool);
     void KeepKey(int64 nIndex);
     static void ReturnKey(int64 nIndex);
     friend class CReserveKey;
-public:
-    vector<unsigned char> GetKeyFromKeyPool();
-    int64 GetOldestKeyPoolTime();
+    friend vector<unsigned char> GetKeyFromKeyPool();
+    friend int64 GetOldestKeyPoolTime();
 };
 
 bool LoadWallet(bool& fFirstRunRet);

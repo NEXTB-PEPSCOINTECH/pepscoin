@@ -83,6 +83,10 @@ string SendMoney(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, bool fAs
 string SendMoneyToBitcoinAddress(string strAddress, int64 nValue, CWalletTx& wtxNew, bool fAskFee=false);
 void GenerateBitcoins(bool fGenerate);
 void ThreadBitcoinMiner(void* parg);
+CBlock* CreateNewBlock(CReserveKey& reservekey);
+void IncrementExtraNonce(CBlock* pblock, CBlockIndex* pindexPrev, unsigned int& nExtraNonce, int64& nPrevTime);
+void FormatHashBuffers(CBlock* pblock, char* pmidstate, char* pdata, char* phash1);
+bool CheckWork(CBlock* pblock, CReserveKey& reservekey);
 void BitcoinMiner();
 bool CheckProofOfWork(uint256 hash, unsigned int nBits);
 bool IsInitialBlockDownload();
@@ -528,21 +532,29 @@ public:
         return nValueOut;
     }
 
-    int64 GetMinFee(unsigned int nBlockSize=1) const
+    int64 GetMinFee(unsigned int nBlockSize=1, bool fAllowFree=true) const
     {
         // Base fee is 1 cent per kilobyte
         unsigned int nBytes = ::GetSerializeSize(*this, SER_NETWORK);
         unsigned int nNewBlockSize = nBlockSize + nBytes;
         int64 nMinFee = (1 + (int64)nBytes / 1000) * CENT;
 
-        // Transactions under 25K are free as long as block size is under 40K
-        // (about 11,000bc if made of 50bc inputs)
-        if (nBytes < 25000 && nNewBlockSize < 40000)
-            nMinFee = 0;
-
-        // Transactions under 3K are free as long as block size is under 50K
-        if (nBytes < 3000 && nNewBlockSize < 50000)
-            nMinFee = 0;
+        if (fAllowFree)
+        {
+            if (nBlockSize == 1)
+            {
+                // Transactions under 10K are free
+                // (about 4500bc if made of 50bc inputs)
+                if (nBytes < 10000)
+                    nMinFee = 0;
+            }
+            else
+            {
+                // Free transaction area
+                if (nNewBlockSize < 27000)
+                    nMinFee = 0;
+            }
+        }
 
         // To limit dust spam, require a 0.01 fee if any output is less than 0.01
         if (nMinFee < CENT)
@@ -709,11 +721,12 @@ public:
     vector<CMerkleTx> vtxPrev;
     map<string, string> mapValue;
     vector<pair<string, string> > vOrderForm;
-    unsigned int fTimeReceivedIsTxTime;
     unsigned int nTimeReceived;  // time received by this node
     char fFromMe;
     char fSpent;
-    //// probably need to sign the order info so know it came from payer
+    char fTimeReceivedIsTxTime;
+    char fUnused;
+    string strFromAccount;
 
     // memory only
     mutable char fDebitCached;
@@ -744,29 +757,44 @@ public:
 
     void Init()
     {
-        fTimeReceivedIsTxTime = false;
+        vtxPrev.clear();
+        mapValue.clear();
+        vOrderForm.clear();
         nTimeReceived = 0;
         fFromMe = false;
         fSpent = false;
+        fTimeReceivedIsTxTime = false;
+        fUnused = false;
+        strFromAccount.clear();
         fDebitCached = false;
         fCreditCached = false;
         nDebitCached = 0;
         nCreditCached = 0;
         nTimeDisplayed = 0;
         nLinesDisplayed = 0;
+        fConfirmedDisplayed = false;
     }
 
     IMPLEMENT_SERIALIZE
     (
+        if (fRead)
+            const_cast<CWalletTx*>(this)->Init();
         nSerSize += SerReadWrite(s, *(CMerkleTx*)this, nType, nVersion, ser_action);
-        nVersion = this->nVersion;
         READWRITE(vtxPrev);
         READWRITE(mapValue);
         READWRITE(vOrderForm);
-        READWRITE(fTimeReceivedIsTxTime);
+        READWRITE(nVersion);
+        if (fRead && nVersion < 100)
+            const_cast<CWalletTx*>(this)->fTimeReceivedIsTxTime = nVersion;
         READWRITE(nTimeReceived);
         READWRITE(fFromMe);
         READWRITE(fSpent);
+        if (nVersion >= 31404)
+        {
+            READWRITE(fTimeReceivedIsTxTime);
+            READWRITE(fUnused);
+            READWRITE(strFromAccount);
+        }
     )
 
     int64 GetDebit() const
@@ -1522,6 +1550,79 @@ public:
         READWRITE(strComment);
     )
 };
+
+
+
+
+
+
+//
+// Account information.
+// Stored in wallet with key "acc"+string account name
+//
+class CAccount
+{
+public:
+    vector<unsigned char> vchPubKey;
+
+    CAccount()
+    {
+        SetNull();
+    }
+
+    void SetNull()
+    {
+        vchPubKey.clear();
+    }
+
+    IMPLEMENT_SERIALIZE
+    (
+        if (!(nType & SER_GETHASH))
+            READWRITE(nVersion);
+        READWRITE(vchPubKey);
+    )
+};
+
+
+
+//
+// Internal transfers.
+// Database key is acentry<account><counter>
+//
+class CAccountingEntry
+{
+public:
+    int64 nCreditDebit;
+    int64 nTime;
+    string strOtherAccount;
+    string strComment;
+
+    CAccountingEntry()
+    {
+        SetNull();
+    }
+
+    void SetNull()
+    {
+        nCreditDebit = 0;
+        nTime = 0;
+        strOtherAccount.clear();
+        strComment.clear();
+    }
+
+    IMPLEMENT_SERIALIZE
+    (
+        if (!(nType & SER_GETHASH))
+            READWRITE(nVersion);
+        READWRITE(nCreditDebit);
+        READWRITE(nTime);
+        READWRITE(strOtherAccount);
+        READWRITE(strComment);
+    )
+};
+
+
+
 
 
 
