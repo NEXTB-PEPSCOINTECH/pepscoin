@@ -22,7 +22,6 @@ static const int64 CENT = 1000000;
 static const int64 MAX_MONEY = 21000000 * COIN;
 inline bool MoneyRange(int64 nValue) { return (nValue >= 0 && nValue <= MAX_MONEY); }
 static const int COINBASE_MATURITY = 100;
-static const CBigNum bnProofOfWorkLimit(~uint256(0) >> 32);
 
 
 
@@ -31,7 +30,8 @@ static const CBigNum bnProofOfWorkLimit(~uint256(0) >> 32);
 
 extern CCriticalSection cs_main;
 extern map<uint256, CBlockIndex*> mapBlockIndex;
-extern const uint256 hashGenesisBlock;
+extern uint256 hashGenesisBlock;
+extern CBigNum bnProofOfWorkLimit;
 extern CBlockIndex* pindexGenesisBlock;
 extern int nBestHeight;
 extern CBigNum bnBestChainWork;
@@ -76,8 +76,8 @@ bool ProcessMessages(CNode* pfrom);
 bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv);
 bool SendMessages(CNode* pto, bool fSendTrickle);
 int64 GetBalance();
-bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CKey& keyRet, int64& nFeeRequiredRet);
-bool CommitTransaction(CWalletTx& wtxNew, const CKey& key);
+bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CReserveKey& reservekey, int64& nFeeRequiredRet);
+bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);
 bool BroadcastTransaction(CWalletTx& wtxNew);
 string SendMoney(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, bool fAskFee=false);
 string SendMoneyToBitcoinAddress(string strAddress, int64 nValue, CWalletTx& wtxNew, bool fAskFee=false);
@@ -195,7 +195,7 @@ public:
 
     string ToString() const
     {
-        return strprintf("COutPoint(%s, %d)", hash.ToString().substr(0,6).c_str(), n);
+        return strprintf("COutPoint(%s, %d)", hash.ToString().substr(0,10).c_str(), n);
     }
 
     void print() const
@@ -361,7 +361,7 @@ public:
     {
         if (scriptPubKey.size() < 6)
             return "CTxOut(error)";
-        return strprintf("CTxOut(nValue=%"PRI64d".%08"PRI64d", scriptPubKey=%s)", nValue / COIN, nValue % COIN, scriptPubKey.ToString().substr(0,24).c_str());
+        return strprintf("CTxOut(nValue=%"PRI64d".%08"PRI64d", scriptPubKey=%s)", nValue / COIN, nValue % COIN, scriptPubKey.ToString().substr(0,30).c_str());
     }
 
     void print() const
@@ -599,7 +599,7 @@ public:
     {
         string str;
         str += strprintf("CTransaction(hash=%s, ver=%d, vin.size=%d, vout.size=%d, nLockTime=%d)\n",
-            GetHash().ToString().substr(0,6).c_str(),
+            GetHash().ToString().substr(0,10).c_str(),
             nVersion,
             vin.size(),
             vout.size(),
@@ -785,6 +785,37 @@ public:
         nCreditCached = CTransaction::GetCredit();
         fCreditCached = true;
         return nCreditCached;
+    }
+
+    bool IsConfirmed() const
+    {
+        map<uint256, const CMerkleTx*> mapPrev;
+        vector<const CMerkleTx*> vWorkQueue;
+        vWorkQueue.reserve(vtxPrev.size()+1);
+        vWorkQueue.push_back(this);
+        for (int i = 0; i < vWorkQueue.size(); i++)
+        {
+            const CMerkleTx* ptx = vWorkQueue[i];
+
+            if (!ptx->IsFinal())
+                return false;
+            if (ptx->GetDepthInMainChain() >= 1)
+                return true;
+            if (ptx->GetDebit() <= 0)
+                return false;
+
+            if (mapPrev.empty())
+                foreach(const CMerkleTx& tx, vtxPrev)
+                    mapPrev[tx.GetHash()] = &tx;
+
+            foreach(const CTxIn& txin, ptx->vin)
+            {
+                if (!mapPrev.count(txin.prevout.hash))
+                    return false;
+                vWorkQueue.push_back(mapPrev[txin.prevout.hash]);
+            }
+        }
+        return true;
     }
 
     bool WriteToDisk()
@@ -1065,7 +1096,7 @@ public:
             GetHash().ToString().substr(0,20).c_str(),
             nVersion,
             hashPrevBlock.ToString().substr(0,20).c_str(),
-            hashMerkleRoot.ToString().substr(0,6).c_str(),
+            hashMerkleRoot.ToString().substr(0,10).c_str(),
             nTime, nBits, nNonce,
             vtx.size());
         for (int i = 0; i < vtx.size(); i++)
@@ -1075,7 +1106,7 @@ public:
         }
         printf("  vMerkleTree: ");
         for (int i = 0; i < vMerkleTree.size(); i++)
-            printf("%s ", vMerkleTree[i].ToString().substr(0,6).c_str());
+            printf("%s ", vMerkleTree[i].ToString().substr(0,10).c_str());
         printf("\n");
     }
 
@@ -1233,7 +1264,7 @@ public:
     {
         return strprintf("CBlockIndex(nprev=%08x, pnext=%08x, nFile=%d, nBlockPos=%-6d nHeight=%d, merkle=%s, hashBlock=%s)",
             pprev, pnext, nFile, nBlockPos, nHeight,
-            hashMerkleRoot.ToString().substr(0,6).c_str(),
+            hashMerkleRoot.ToString().substr(0,10).c_str(),
             GetBlockHash().ToString().substr(0,20).c_str());
     }
 

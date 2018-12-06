@@ -16,6 +16,7 @@ bool fShutdown = false;
 bool fDaemon = false;
 bool fCommandLine = false;
 string strMiscWarning;
+bool fTestNet = false;
 
 
 
@@ -572,7 +573,7 @@ void PrintExceptionContinue(std::exception* pex, const char* pszThread)
     strMiscWarning = pszMessage;
 #ifdef GUI
     if (wxTheApp && !fDaemon)
-        boost::thread(bind(ThreadOneMessageBox, string(pszMessage)));
+        boost::thread(boost::bind(ThreadOneMessageBox, string(pszMessage)));
 #endif
 }
 
@@ -649,15 +650,11 @@ string GetDefaultDataDir()
 void GetDataDir(char* pszDir)
 {
     // pszDir must be at least MAX_PATH length.
+    int nVariation;
     if (pszSetDataDir[0] != 0)
     {
         strlcpy(pszDir, pszSetDataDir, MAX_PATH);
-        static bool fMkdirDone;
-        if (!fMkdirDone)
-        {
-            fMkdirDone = true;
-            filesystem::create_directory(pszDir);
-        }
+        nVariation = 0;
     }
     else
     {
@@ -665,11 +662,23 @@ void GetDataDir(char* pszDir)
         // value so we don't have to do memory allocations after that.
         static char pszCachedDir[MAX_PATH];
         if (pszCachedDir[0] == 0)
-        {
             strlcpy(pszCachedDir, GetDefaultDataDir().c_str(), sizeof(pszCachedDir));
-            filesystem::create_directory(pszCachedDir);
-        }
         strlcpy(pszDir, pszCachedDir, MAX_PATH);
+        nVariation = 1;
+    }
+    if (fTestNet)
+    {
+        char* p = pszDir + strlen(pszDir);
+        if (p > pszDir && p[-1] != '/' && p[-1] != '\\')
+            *p++ = '/';
+        strcpy(p, "testnet");
+        nVariation += 2;
+    }
+    static bool pfMkdir[4];
+    if (!pfMkdir[nVariation])
+    {
+        pfMkdir[nVariation] = true;
+        filesystem::create_directory(pszDir);
     }
 }
 
@@ -807,7 +816,7 @@ void AddTimeData(unsigned int ip, int64 nTime)
                 string strMessage = _("Warning: Please check that your computer's date and time are correct.  If your clock is wrong Bitcoin will not work properly.");
                 strMiscWarning = strMessage;
                 printf("*** %s\n", strMessage.c_str());
-                boost::thread(bind(ThreadSafeMessageBox, strMessage+" ", string("Bitcoin"), wxOK | wxICON_EXCLAMATION, (wxWindow*)NULL, -1, -1));
+                boost::thread(boost::bind(ThreadSafeMessageBox, strMessage+" ", string("Bitcoin"), wxOK | wxICON_EXCLAMATION, (wxWindow*)NULL, -1, -1));
             }
         }
         foreach(int64 n, vTimeOffsets)
